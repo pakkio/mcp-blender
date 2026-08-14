@@ -7,12 +7,14 @@ from .advanced_material_ops import register_advanced_material_tools
 from .advanced_mesh_edit_ops import register_advanced_mesh_edit_tools
 from .animation_ops import register_animation_tools
 from .apply_transform import register_apply_transform_tool
+from .asset_browser_ops import register_asset_browser_tools
 from .boolean_ops import register_boolean_tools
 from .camera_ops import register_camera_tools
 from .collection_ops import register_collection_tools
 from .compositor_effects_ops import register_compositor_effects_tools
 from .constraint_ops import register_constraint_tools
 from .create_object import register_create_object_tool
+from .curve_wire_ops import register_curve_wire_tools
 from .delete_object import register_delete_object_tool
 from .duplicate_object import register_duplicate_object_tool
 from .execute_python import register_execute_blender_python_tool
@@ -21,6 +23,7 @@ from .get_object_info import register_get_object_info_tool
 from .get_scene_info import register_get_scene_info_tool
 from .grease_pencil_ops import register_grease_pencil_tools
 from .io_ops import register_io_tools
+from .lattice_deform_ops import register_lattice_deform_tools
 from .light_ops import register_light_tools
 from .material_ops import register_material_tools
 from .mesh_operation import register_mesh_operation_tool
@@ -36,14 +39,17 @@ from .render_ops import register_render_tools
 from .rigging_ops import register_rigging_tools
 from .sculpt_ops import register_sculpt_tools
 from .select_objects import register_select_objects_tool
+from .sequencer_vse_ops import register_sequencer_vse_tools
 from .set_object_properties import register_set_object_properties_tool
 from .set_object_transform import register_set_object_transform_tool
 from .shape_key_ops import register_shape_key_tools
 from .studio_lighting_ops import register_studio_lighting_tools
+from .text_typography_ops import register_text_typography_tools
 from .texture_image_ops import register_texture_image_tools
 from .uv_ops import register_uv_tools
 from .viewport_scene_advanced_ops import register_viewport_scene_advanced_tools
 from .vision_feedback_ops import register_vision_feedback_tools
+from .volumetric_vdb_ops import register_volumetric_vdb_tools
 from .world_environment_ops import register_world_environment_tools
 
 REGISTER_FUNCS = (
@@ -90,16 +96,22 @@ REGISTER_FUNCS = (
     register_render_effects_tools,
     register_advanced_mesh_edit_tools,
     register_viewport_scene_advanced_tools,
-    # --- Vision-in-the-Loop, Compositor, Physics, Studio Lighting & NPR ---
+    # --- Vision, Compositor, Physics, Studio Lighting & NPR ---
     register_vision_feedback_tools,
     register_compositor_effects_tools,
     register_physics_simulation_tools,
     register_studio_lighting_tools,
     register_grease_pencil_tools,
+    # --- 0.5.2 Additions: 3D Typography, Curves/Cables, Assets, Lattice, Volumetrics, Sequencer (100 Tools) ---
+    register_text_typography_tools,
+    register_curve_wire_tools,
+    register_asset_browser_tools,
+    register_lattice_deform_tools,
+    register_volumetric_vdb_tools,
+    register_sequencer_vse_tools,
 )
 
 
 def register_all_tools(mcp: FastMCP, bridge: BlenderBridge) -> None:
     for register_func in REGISTER_FUNCS:
         register_func(mcp, bridge)
-

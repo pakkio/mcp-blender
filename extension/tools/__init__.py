@@ -4,6 +4,11 @@ from .advanced_material_ops import EditMaterialNodesTool, ManageColorAttributesT
 from .advanced_mesh_edit_ops import AdvancedMeshEditTool, ManipulateOriginCursorTool
 from .animation_ops import DeleteKeyframeTool, SetKeyframeTool, SetTimelineRangeTool
 from .apply_transform import ApplyTransformTool
+from .asset_browser_ops import (
+    GenerateAssetPreviewTool,
+    ImportAssetLibraryTool,
+    ManageAssetBrowserTool,
+)
 from .boolean_ops import BooleanOperationTool
 from .camera_ops import CameraLookAtTool, ConfigureCameraTool, FrameObjectsTool
 from .collection_ops import ManageCollectionTool
@@ -13,6 +18,11 @@ from .compositor_effects_ops import (
 )
 from .constraint_ops import AddConstraintTool, AnimateCameraTurntableTool
 from .create_object import CreateObjectTool
+from .curve_wire_ops import (
+    ConvertMeshToCurveTool,
+    CreateCurveCableTool,
+    EditCurvePointsTool,
+)
 from .delete_object import DeleteObjectTool
 from .duplicate_object import DuplicateObjectTool
 from .execute_python import ExecuteBlenderPythonTool
@@ -25,6 +35,10 @@ from .get_object_info import GetObjectInfoTool
 from .get_scene_info import GetSceneInfoTool
 from .grease_pencil_ops import SetupLineArtContourTool
 from .io_ops import ExportSceneTool, ImportFileTool
+from .lattice_deform_ops import (
+    CreateLatticeDeformTool,
+    DeformLatticePointsTool,
+)
 from .light_ops import ConfigureLightTool
 from .material_ops import (
     AssignMaterialTool,
@@ -69,12 +83,21 @@ from .sculpt_ops import (
     SculptMaskFaceSetsTool,
 )
 from .select_objects import SelectObjectsTool
+from .sequencer_vse_ops import (
+    ConfigureSequencerAudioTool,
+    ManageSequencerStripsTool,
+)
 from .set_object_properties import SetObjectPropertiesTool
 from .set_object_transform import SetObjectTransformTool
 from .shape_key_ops import ManageShapeKeysTool
 from .studio_lighting_ops import (
     ConfigureLightLinkingTool,
     CreateLightingRigTool,
+)
+from .text_typography_ops import (
+    Create3DTextTool,
+    DeformTextAlongCurveTool,
+    SetTextPropertiesTool,
 )
 from .texture_image_ops import ImportImageAsPlaneTool, ProjectImageTextureTool
 from .uv_ops import UVUnwrapTool
@@ -86,6 +109,11 @@ from .viewport_scene_advanced_ops import (
 from .vision_feedback_ops import (
     CaptureMultiviewAuditTool,
     InspectFocusShotTool,
+)
+from .volumetric_vdb_ops import (
+    BakeFluidDomainTool,
+    ConfigureVolumeShaderTool,
+    CreateVolumeVDBTool,
 )
 from .world_environment_ops import (
     ConfigureScenePhysicsTool,
@@ -172,7 +200,7 @@ ALL_TOOLS = (
     ConfigureViewportDisplayTool(),
     PurgeOrphansAndCleanupTool(),
     AlignDistributeObjectsTool(),
-    # --- Vision-in-the-Loop, Compositor, Physics, Studio Lighting & NPR ---
+    # --- Vision, Compositor, Physics, Studio Lighting & NPR ---
     CaptureMultiviewAuditTool(),
     InspectFocusShotTool(),
     ConfigureCompositorEffectsTool(),
@@ -183,6 +211,23 @@ ALL_TOOLS = (
     CreateLightingRigTool(),
     ConfigureLightLinkingTool(),
     SetupLineArtContourTool(),
+    # --- 0.5.2 Additions: 3D Typography, Curves/Cables, Assets, Lattice, Volumetrics, Sequencer (100 Tools) ---
+    Create3DTextTool(),
+    DeformTextAlongCurveTool(),
+    SetTextPropertiesTool(),
+    CreateCurveCableTool(),
+    ConvertMeshToCurveTool(),
+    EditCurvePointsTool(),
+    ManageAssetBrowserTool(),
+    GenerateAssetPreviewTool(),
+    ImportAssetLibraryTool(),
+    CreateLatticeDeformTool(),
+    DeformLatticePointsTool(),
+    CreateVolumeVDBTool(),
+    ConfigureVolumeShaderTool(),
+    BakeFluidDomainTool(),
+    ManageSequencerStripsTool(),
+    ConfigureSequencerAudioTool(),
 )
 
 TOOL_REGISTRY = {tool.name: tool for tool in ALL_TOOLS}

@@ -68,41 +68,67 @@ MCP client (Claude) <--stdio--> mcp_server (pip package) <--WebSocket--> extensi
 ### 12. Advanced Shader Node Trees & Color Attributes
 - **`edit_material_nodes`**: Full low-level control over shader node graphs: create custom shader nodes, connect/disconnect sockets, set socket values, and inspect material node trees.
 - **`manage_color_attributes`**: Create vertex color layers, fill solid colors, or generate procedural height/coordinate color gradients.
+- **`setup_rigid_body_simulation`**: Rigid body physics with automated `settle_simulation` natural drop settling.
+- **`setup_cloth_simulation`**: Configures cloth presets (SILK, COTTON, LEATHER, DENIM, RUBBER) and structural stiffness.
+- **`add_force_field`**: Adds WIND, VORTEX, FORCE, TURBULENCE, and HARMONIC dynamics.
 
-### 13. Sculpting & Organic Modeling
-- **`configure_sculpt_mode`**: Enter/exit Sculpt Mode, select active brushes (Draw, Clay, Clay Strips, Crease, Smooth, Flatten, Grab, Snake Hook, Elastic Deform, Pinch, Cloth, Scrape), configure brush radius, strength, XYZ symmetry, and Dynamic Topology (Dyntopo).
-- **`apply_sculpt_filter`**: Full-mesh sculpt deformation filters (SMOOTH, SCALE, INFLATE, SPHERE, RANDOM, RELAX, RELAX_FACE_SETS, SURFACE_SMOOTH, SHARPEN, ENHANCE_DETAILS) with customizable axis and strength.
-- **`sculpt_mask_facesets`**: Manage sculpt masks (clear, invert, smooth) and initialize Face Sets (by loose parts, materials, or mask selection).
+### 4. Studio Lighting Rigs & Light Linking
+- **`create_lighting_rig`**: Spawns studio rigs (`THREE_POINT_STUDIO`, `PRODUCT_SOFTBOX`, `CYBERPUNK_NEON`, `FILM_NOIR`, `WARM_GOLDEN_HOUR`).
+- **`configure_light_linking`**: Blender 4.0+/5.x object-specific light linking and shadow linking receivers.
 
-### 14. Modeling & Hard-Surface Geometry
-- **`boolean_operation`**: UNION, DIFFERENCE, INTERSECT, SLICE with FAST or EXACT solvers and operand cleanup.
-- **`decimate_mesh`**: High-speed polygon reduction (COLLAPSE with ratio/symmetry, UNSUBDIVIDE iterations, PLANAR angle limits).
-- **`remesh_mesh`**: Native VOXEL remesher with adaptivity and modifier-based SHARP/SMOOTH/BLOCKS remeshing.
-- **`mesh_operation`**: Subdivision, triangulation, normals recalculation, merge vertices, bevel, inset individual faces, symmetrize, convex hull, dissolve degenerate.
-- **`create_object`**: Create primitives (CUBE, UV_SPHERE, ICO_SPHERE, CYLINDER, CONE, PLANE, TORUS, GRID, MONKEY, EMPTY, CAMERA, LIGHT, TEXT, CURVE).
-- **`add_modifier`**, **`set_modifier_properties`**, **`apply_modifier`**, **`remove_modifier`**: Full modifier stack lifecycle.
-- **`apply_transform`**: Permanently bake location, rotation, and scale transforms into mesh geometry.
+### 5. Grease Pencil v3 Real-Time Line Art
+- **`setup_line_art_contour`**: GPv3 silhouette cartoon ink outlines from scene/collection geometry with color tinting and stroke smoothing.
 
-### 10. UV Mapping, Texturing & PBR Shaders
-- **`uv_unwrap`**: Complete unwrapping suite (SMART_PROJECT, LIGHTMAP_PACK, CUBE_PROJECT, SPHERE_PROJECT, CYLINDER_PROJECT, PROJECT_FROM_VIEW, UNWRAP, PACK_ISLANDS).
-- **`import_image_as_plane`**: Instant textured 3D plane generation matching image aspect ratio with alpha transparency handling.
-- **`project_image_texture`**: Project decals or textures using camera projection or empty-driven mapping.
-- **`setup_pbr_materials`**: Automated multi-map PBR shader graph setup (Albedo, Normal, Roughness, Metallic, Height, Emission, AO) with automated color spaces.
-- **`create_procedural_material`**: Procedural shaders (NOISE, VORONOI, WAVE, BRICK, CHECKER, GRADIENT) with ColorRamps and bump mapping.
-- **`bake_textures`**: Cycles texture baking (DIFFUSE, NORMAL, ROUGHNESS, AO, COMBINED) to target image maps.
-- **`create_material`**, **`assign_material`**, **`get_material_info`**, **`set_material_properties`**: Principled BSDF shader control.
+### 6. Render Effects & Material Transparency
+- **`configure_render_effects`**: Viewport Ambient Occlusion, EEVEE Next Raytracing/Screen Space Reflections, Depth of Field, and Film Transparent alpha.
+- **`configure_material_transparency`**: Transmission weight, IOR, and blend modes for glass, water, crystals, and acrylics.
 
-### 11. Animation, Rigging & Pipeline Exports
-- **`create_armature`**: Generate single-bone or multi-bone hierarchical skeletal rigs, bind meshes with automatic vertex weights.
-- **`pose_bone`**: Pose bones in Pose Mode (location, rotation, scale) and insert skeletal keyframes.
-- **`manage_shape_keys`**: Create Basis and morph target shape keys, set weights (0.0 to 1.0), and keyframe morph animations.
-- **`add_constraint`**: Add object/bone constraints (TRACK_TO, DAMPED_TRACK, FOLLOW_PATH, COPY_TRANSFORMS, COPY_LOCATION, COPY_ROTATION, LIMIT_DISTANCE, CHILD_OF, IK).
-- **`animate_camera_turntable`**: Auto-generate smooth 360-degree orbital camera turntable animations.
-- **`export_unity_fbx`**: Unity-tailored FBX export (fixes Unity -90° X rotation axis bug, strips dummy leaf bones, bakes animations, embeds textures).
-- **`export_scene`**: Advanced GLTF/GLB export with Draco mesh compression, animation baking, material export, FBX, OBJ, STL, USD.
-- **`generate_lods`**: Multi-level LOD generation (LOD0..LODn) with decimation ratios and LOD Group empty hierarchy.
-- **`import_file`**: Import GLTF, GLB, FBX, OBJ, STL, USD, and BLEND files.
-- **`set_keyframe`**, **`delete_keyframe`**, **`set_timeline_range`**, **`configure_preferences`**, **`get_system_info`**, **`configure_world_environment`**, **`configure_scene_physics`**, **`switch_workspace`**, **`get_scene_info`**, **`get_object_info`**, **`select_objects`**, **`delete_object`**, **`duplicate_object`**, **`parent_objects`**, **`unparent_objects`**, **`manage_collection`**, **`configure_camera`**, **`camera_look_at`**, **`frame_objects`**, **`configure_light`**, **`render_scene`**, **`get_viewport_screenshot`**, **`set_render_settings`**, **`execute_blender_python`**.
+### 7. Advanced Mesh Surgery & Cursor / Origin Manipulation
+- **`advanced_mesh_edit`**: Bisect plane cuts with cap fill, bridge edge loops with lofting curves, extrude along normals, and edge creasing.
+- **`manipulate_origin_cursor`**: Sets object origin (`ORIGIN_TO_BOTTOM` for ground alignment, `ORIGIN_TO_CURSOR`, `ORIGIN_TO_GEOMETRY`) and 3D cursor placement.
+- **`align_distribute_objects`**: Snaps objects to ground ($Z=0$), aligns along axes, and distributes along grids.
+
+### 8. Geometry Nodes Studio & Shader Graph Control
+- **`create_geometry_nodes`**: Procedural node graphs (`SCATTER_ON_SURFACE`, `EXTRUDE_FACES`, `SUBDIVIDE_AND_NOISE`).
+- **`edit_geometry_nodes`**: Add nodes, connect sockets, update parameters, and inspect full node graphs.
+- **`bake_geometry_nodes`**: Converts procedural geometry into permanent editable mesh geometry.
+- **`edit_material_nodes`**: Complete low-level shader graph inspection and node wiring.
+- **`manage_color_attributes`**: Vertex color attributes with procedural height/normal gradients.
+
+### 9. 3D Typography & Motion Graphics (New in v0.5.2)
+- **`create_3d_text`**: Create 3D title text with custom fonts, extrude depth, bevel resolution, tracking, leading, alignment (`LEFT`, `CENTER`, `RIGHT`, `JUSTIFY`), and optional convert-to-mesh.
+- **`deform_text_along_curve`**: Curve-guide text wrapping for circular logos, signage, and ribbon banners.
+- **`set_text_properties`**: Modify text content, font size, tracking, extrude, and bevel on existing text objects.
+
+### 10. Curves, Cables, Pipes & Wire Generation (New in v0.5.2)
+- **`create_curve_cable`**: Procedurally route realistic sagging cables, electrical wires, neon tubes, or plumbing pipes between 3D points with bevel depth and gravity sag.
+- **`convert_mesh_to_curve`**: Convert mesh boundary edges into curves for neon wireframes and railings.
+- **`edit_curve_points`**: Add or modify control points, handles, radius, and tilt on Bezier and Poly splines.
+
+### 11. Asset Browser & Library Management (New in v0.5.2)
+- **`manage_asset_browser`**: Mark objects, materials, Geometry Nodes, or skeletal poses as **Blender Assets** (`ASSET_MARK`, `ASSET_CLEAR`), assign catalog tags, authors, and descriptions.
+- **`generate_asset_preview`**: Automatically render and assign a custom thumbnail preview to an asset.
+- **`import_asset_library`**: Link or append approved assets from external `.blend` asset libraries.
+
+### 12. Lattice & Squash/Stretch Deformers (New in v0.5.2)
+- **`create_lattice_deform`**: Automatically fit a 3D lattice cage around any complex model with configurable $U \times V \times W$ resolution and bind with Lattice Modifiers for cartoon squash & stretch.
+- **`deform_lattice_points`**: Procedurally apply `SQUASH_AND_STRETCH`, `BEND`, `TAPER`, or move control points.
+
+### 13. Volumetrics, Clouds & OpenVDB (New in v0.5.2)
+- **`create_volume_vdb`**: Import OpenVDB cloud/smoke files or create procedural volumetric fog domains.
+- **`configure_volume_shader`**: Setup Principled Volume shader graphs (Density, Absorption, Color, Emission, Blackbody).
+- **`bake_fluid_domain`**: Configure Mantaflow smoke, fire, or liquid simulation domains and trigger cache baking.
+
+### 14. Video Sequence Editor & Timeline Audio (New in v0.5.2)
+- **`manage_sequencer_strips`**: Load background music, audio sound effects, video clips, or color strips directly into the VSE timeline.
+- **`configure_sequencer_audio`**: Adjust volume, pan, pitch, and sync audio with 3D animation keyframes.
+
+### 15. Hard-Surface Modeling & Modifiers
+- **`boolean_operation`**: UNION, DIFFERENCE, INTERSECT with dynamic solver resolution (`FLOAT`, `EXACT`, `MANIFOLD`).
+- **`decimate_mesh`**, **`remesh_mesh`**, **`mesh_operation`**, **`create_object`**, **`add_modifier`**, **`set_modifier_properties`**, **`apply_modifier`**, **`remove_modifier`**, **`apply_transform`**.
+
+### 16. UV, Rigging, Animation, Engine Exports & Scene Management
+- **`uv_unwrap`**, **`import_image_as_plane`**, **`project_image_texture`**, **`setup_pbr_materials`**, **`create_procedural_material`**, **`bake_textures`**, **`create_armature`**, **`pose_bone`**, **`manage_shape_keys`**, **`add_constraint`**, **`animate_camera_turntable`**, **`export_unity_fbx`**, **`export_scene`**, **`generate_lods`**, **`import_file`**, **`manage_addons`**, **`inspect_addon`**, **`bake_advanced`**, **`configure_light_probe`**, **`purge_orphans_and_cleanup`**, **`set_keyframe`**, **`delete_keyframe`**, **`set_timeline_range`**, **`configure_preferences`**, **`get_system_info`**, **`configure_world_environment`**, **`configure_scene_physics`**, **`switch_workspace`**, **`get_scene_info`**, **`get_object_info`**, **`select_objects`**, **`delete_object`**, **`duplicate_object`**, **`parent_objects`**, **`unparent_objects`**, **`manage_collection`**, **`configure_camera`**, **`camera_look_at`**, **`frame_objects`**, **`configure_light`**, **`render_scene`**, **`get_viewport_screenshot`**, **`set_render_settings`**, **`execute_blender_python`**.
 
 ---
 
@@ -111,11 +137,11 @@ MCP client (Claude) <--stdio--> mcp_server (pip package) <--WebSocket--> extensi
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-0.5.1.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-0.5.2.zip
 ```
 
 In Blender: **Edit > Preferences > Get Extensions > (dropdown) > Install from Disk**,
-select `dist/mcp_bridge_pakkio-0.5.1.zip`, and enable it.
+select `dist/mcp_bridge_pakkio-0.5.2.zip`, and enable it.
 
 ### 2. Install the MCP server
 
@@ -140,5 +166,4 @@ For Claude Code / Claude Desktop / Antigravity:
 
 ## License
 
-MIT -- see `LICENSE`.
-
+MIT -- see `LICENSE`..
