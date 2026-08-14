@@ -9,6 +9,7 @@ from .asset_browser_ops import (
     ImportAssetLibraryTool,
     ManageAssetBrowserTool,
 )
+from .batch_execution_ops import ExecuteBatchTool
 from .boolean_ops import BooleanOperationTool
 from .camera_ops import CameraLookAtTool, ConfigureCameraTool, FrameObjectsTool
 from .collection_ops import ManageCollectionTool
@@ -66,6 +67,7 @@ from .physics_simulation_ops import (
 )
 from .pipeline_export_ops import ExportUnityFBXTool, GenerateLODsTool
 from .preference_ops import ConfigurePreferencesTool, GetSystemInfoTool
+from .progress_hud_ops import ClearProgressHUDTool, UpdateProgressHUDTool
 from .remesh_decimate_ops import DecimateMeshTool, RemeshMeshTool
 from .render_effects_ops import (
     ConfigureMaterialTransparencyTool,
@@ -228,6 +230,10 @@ ALL_TOOLS = (
     BakeFluidDomainTool(),
     ManageSequencerStripsTool(),
     ConfigureSequencerAudioTool(),
+    # --- 0.9.0 Additions: Batch Execution & Non-Modal Progress HUD Window (103 Tools) ---
+    ExecuteBatchTool(),
+    UpdateProgressHUDTool(),
+    ClearProgressHUDTool(),
 )
 
 TOOL_REGISTRY = {tool.name: tool for tool in ALL_TOOLS}

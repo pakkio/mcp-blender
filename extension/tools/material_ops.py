@@ -35,9 +35,9 @@ class CreateMaterialTool(ToolBase):
     description = "Create a PBR material with Principled BSDF shader and optionally assign it to an object."
 
     def execute(self, params: dict) -> dict:
-        name = params.get("name")
+        name = params.get("name") or params.get("material_name")
         if not name:
-            return {"success": False, "message": "'name' is required"}
+            return {"success": False, "message": "'name' or 'material_name' is required"}
 
         # Create or get material
         mat = bpy.data.materials.get(name)

@@ -8,6 +8,7 @@ from .advanced_mesh_edit_ops import register_advanced_mesh_edit_tools
 from .animation_ops import register_animation_tools
 from .apply_transform import register_apply_transform_tool
 from .asset_browser_ops import register_asset_browser_tools
+from .batch_execution_ops import register_batch_execution_tools
 from .boolean_ops import register_boolean_tools
 from .camera_ops import register_camera_tools
 from .collection_ops import register_collection_tools
@@ -33,6 +34,7 @@ from .pbr_bake_ops import register_pbr_bake_tools
 from .physics_simulation_ops import register_physics_simulation_tools
 from .pipeline_export_ops import register_pipeline_export_tools
 from .preference_ops import register_preference_tools
+from .progress_hud_ops import register_progress_hud_tools
 from .remesh_decimate_ops import register_remesh_decimate_tools
 from .render_effects_ops import register_render_effects_tools
 from .render_ops import register_render_tools
@@ -109,6 +111,9 @@ REGISTER_FUNCS = (
     register_lattice_deform_tools,
     register_volumetric_vdb_tools,
     register_sequencer_vse_tools,
+    # --- 0.9.0 Additions: Batch Execution & Non-Modal Progress HUD (103 Tools) ---
+    register_batch_execution_tools,
+    register_progress_hud_tools,
 )
 
 
