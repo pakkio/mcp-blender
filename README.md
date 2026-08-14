@@ -1,4 +1,4 @@
-# mcp-blender-pakkio (v0.5.0)
+# mcp-blender-pakkio (v0.5.1)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -111,11 +111,11 @@ MCP client (Claude) <--stdio--> mcp_server (pip package) <--WebSocket--> extensi
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-0.5.0.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-0.5.1.zip
 ```
 
 In Blender: **Edit > Preferences > Get Extensions > (dropdown) > Install from Disk**,
-select `dist/mcp_bridge_pakkio-0.5.0.zip`, and enable it.
+select `dist/mcp_bridge_pakkio-0.5.1.zip`, and enable it.
 
 ### 2. Install the MCP server
 
