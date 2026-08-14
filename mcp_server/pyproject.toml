@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-blender-pakkio"
+version = "0.5.0"
+description = "MCP stdio server that bridges MCP clients (e.g. Claude) to Blender via the mcp-blender-pakkio extension"
+license = "MIT"
+authors = [{ name = "Claudio Pacchiega", email = "claudio.pacchiega@gmail.com" }]
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.2.0,<2.0.0",
+    "websockets>=13.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+mcp-blender-pakkio = "mcp_blender_pakkio.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_blender_pakkio"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
