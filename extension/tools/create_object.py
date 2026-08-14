@@ -27,7 +27,7 @@ class CreateObjectTool(ToolBase):
             if size is not None:
                 kw["size"] = size
             bpy.ops.mesh.primitive_cube_add(**kw)
-        elif object_type == "UV_SPHERE":
+        elif object_type in ("UV_SPHERE", "SPHERE"):
             kw = {"location": location}
             if radius is not None:
                 kw["radius"] = radius

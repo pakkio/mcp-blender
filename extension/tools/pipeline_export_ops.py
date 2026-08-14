@@ -76,12 +76,12 @@ class GenerateLODsTool(ToolBase):
     description = "Automatically generate a multi-level Level of Detail (LOD0..LODn) hierarchy with polygon reduction for game engines."
 
     def execute(self, params: dict) -> dict:
-        object_name = params.get("object_name")
-        ratios = params.get("ratios", [1.0, 0.5, 0.25, 0.1])
+        object_name = params.get("object_name") or params.get("target_object") or params.get("name")
+        ratios = params.get("ratios") or params.get("decimate_steps") or [1.0, 0.5, 0.25, 0.1]
         group_name = params.get("group_name")
 
         if not object_name:
-            return {"success": False, "message": "'object_name' is required"}
+            return {"success": False, "message": "'object_name' or 'target_object' is required"}
 
         src_obj = bpy.data.objects.get(object_name)
         if not src_obj or src_obj.type != "MESH":

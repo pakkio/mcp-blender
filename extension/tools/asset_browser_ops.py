@@ -10,14 +10,14 @@ class ManageAssetBrowserTool(ToolBase):
 
     def execute(self, params: dict) -> dict:
         action = params.get("action", "ASSET_MARK").upper()
-        asset_type = params.get("asset_type", "OBJECT").upper()
-        target_name = params.get("target_name")
+        asset_type = (params.get("asset_type") or params.get("datablock_type") or "OBJECT").upper()
+        target_name = params.get("target_name") or params.get("datablock_name") or params.get("name")
         description = params.get("description", "")
         author = params.get("author", "")
         tags = params.get("tags", [])
 
         if not target_name:
-            return {"success": False, "message": "'target_name' is required"}
+            return {"success": False, "message": "'target_name' or 'datablock_name' is required"}
 
         # Find target datablock
         db = None

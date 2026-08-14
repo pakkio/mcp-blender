@@ -62,12 +62,12 @@ class DeformLatticePointsTool(ToolBase):
     description = "Apply procedural deformations (SQUASH_AND_STRETCH, BEND, TAPER, TWIST) or move specific control points on a Lattice object."
 
     def execute(self, params: dict) -> dict:
-        lattice_name = params.get("lattice_name") or params.get("name")
-        deformation = params.get("deformation", "SQUASH_AND_STRETCH").upper()
+        lattice_name = params.get("lattice_name") or params.get("lattice_object") or params.get("name")
+        deformation = (params.get("deformation") or params.get("deformation_type") or "SQUASH_AND_STRETCH").upper()
         factor = float(params.get("factor", 0.3))
 
         if not lattice_name:
-            return {"success": False, "message": "'lattice_name' is required"}
+            return {"success": False, "message": "'lattice_name' or 'lattice_object' is required"}
 
         lat_obj = bpy.data.objects.get(lattice_name)
         if not lat_obj or lat_obj.type != "LATTICE":
