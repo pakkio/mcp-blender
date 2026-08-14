@@ -1,6 +1,16 @@
 from .addon_management_ops import InspectAddonTool, ManageAddonsTool
 from .advanced_bake_ops import BakeAdvancedTool, ConfigureLightProbeTool
+from .advanced_geom_nodes_studio_ops import (
+    CurveToProfileMeshTool,
+    SetupGeometryProximityTool,
+    VolumeMeshBooleansGNTool,
+)
 from .advanced_material_ops import EditMaterialNodesTool, ManageColorAttributesTool
+from .advanced_material_slot_ops import (
+    AutoLoadPBRTextureSetTool,
+    ManageMaterialSlotsTool,
+    ProjectDecalMaterialTool,
+)
 from .advanced_mesh_edit_ops import AdvancedMeshEditTool, ManipulateOriginCursorTool
 from .animation_ops import DeleteKeyframeTool, SetKeyframeTool, SetTimelineRangeTool
 from .apply_transform import ApplyTransformTool
@@ -91,6 +101,12 @@ from .sequencer_vse_ops import (
 )
 from .set_object_properties import SetObjectPropertiesTool
 from .set_object_transform import SetObjectTransformTool
+from .shader_studio_ops import (
+    CreateProceduralGrungeMaskTool,
+    ManageShaderNodeGroupTool,
+    SetupSpecialtyShaderTool,
+    SetupTriplanarMappingTool,
+)
 from .shape_key_ops import ManageShapeKeysTool
 from .studio_lighting_ops import (
     ConfigureLightLinkingTool,
@@ -234,6 +250,17 @@ ALL_TOOLS = (
     ExecuteBatchTool(),
     UpdateProgressHUDTool(),
     ClearProgressHUDTool(),
+    # --- 1.0.0 Additions: Shader Studio, Advanced GN & Material Slot Pipelines (113 Tools) ---
+    CreateProceduralGrungeMaskTool(),
+    SetupTriplanarMappingTool(),
+    SetupSpecialtyShaderTool(),
+    ManageShaderNodeGroupTool(),
+    SetupGeometryProximityTool(),
+    CurveToProfileMeshTool(),
+    VolumeMeshBooleansGNTool(),
+    AutoLoadPBRTextureSetTool(),
+    ManageMaterialSlotsTool(),
+    ProjectDecalMaterialTool(),
 )
 
 TOOL_REGISTRY = {tool.name: tool for tool in ALL_TOOLS}

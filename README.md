@@ -1,4 +1,4 @@
-# mcp-blender-pakkio (v0.9.0)
+# mcp-blender-pakkio (v1.0.0)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -17,7 +17,23 @@ MCP client (Claude) <--stdio--> mcp_server (pip package) <--WebSocket--> extensi
 
 ---
 
-## Tool Catalog (103 Tools across 17 Specialized Domains)
+## Tool Catalog (113 Tools across 17 Specialized Domains)
+
+### 1. Shader Studio & Specialty Shaders (New in v1.0.0)
+- **`create_procedural_grunge_mask`**: Procedural edge-wear cavity, curvature, pointiness, AO, and noise grunge masks for weathered metal and worn surfaces.
+- **`setup_triplanar_mapping`**: Seamless UV-free box / triplanar texture projection for organic rock, terrain, and architecture.
+- **`setup_specialty_shader`**: Production shader presets: `CAR_PAINT` (metallic flakes + clearcoat), `SKIN_SSS` (subsurface scattering), `IRIDESCENT_PEARL` (thin-film interference), `HOLOGRAM_GLOW`, and `GLASS_DISPERSION`.
+- **`manage_shader_node_group`**: Create reusable Shader Node Groups with custom inputs, outputs, and internal sub-networks.
+
+### 2. Advanced Geometry Nodes Studio (New in v1.0.0)
+- **`setup_geometry_proximity_interaction`**: Dynamic proximity deformation/scaling networks reacting to moving source objects.
+- **`curve_to_profile_mesh`**: Sweep custom curve profiles (Circle, Star, Quadrilateral) along paths with automatic caps.
+- **`volume_mesh_booleans_gn`**: Procedural OpenVDB volume meshing and organic blending inside Geometry Nodes (Mesh to Volume $\rightarrow$ Volume to Mesh).
+
+### 3. Advanced Material Slots & Auto-PBR Loader (New in v1.0.0)
+- **`auto_load_pbr_texture_set`**: Automatically inspects texture folders, regex-detects PBR maps (Albedo, Roughness, Metallic, Normal, Height/Displacement, AO), and wires the complete Principled BSDF node graph.
+- **`manage_material_slots`**: Multi-material slot management, slot assignments, and per-face polygon index material assignments.
+- **`project_decal_material`**: Floating alpha decal projection planes parented and shrinkwrapped to target meshes.
 
 ### 1. Batch Execution & Pipeline Optimization (New in v0.9.0)
 - **`execute_batch`**: Executes multiple MCP commands in a single network roundtrip with automatic rollback/stop-on-error, real-time viewport progress updates, and per-step output logging.

@@ -3,7 +3,9 @@ from mcp.server.fastmcp import FastMCP
 from ..bridge import BlenderBridge
 from .addon_management_ops import register_addon_management_tools
 from .advanced_bake_ops import register_advanced_bake_tools
+from .advanced_geom_nodes_studio_ops import register_advanced_geom_nodes_studio_tools
 from .advanced_material_ops import register_advanced_material_tools
+from .advanced_material_slot_ops import register_advanced_material_slot_tools
 from .advanced_mesh_edit_ops import register_advanced_mesh_edit_tools
 from .animation_ops import register_animation_tools
 from .apply_transform import register_apply_transform_tool
@@ -44,6 +46,7 @@ from .select_objects import register_select_objects_tool
 from .sequencer_vse_ops import register_sequencer_vse_tools
 from .set_object_properties import register_set_object_properties_tool
 from .set_object_transform import register_set_object_transform_tool
+from .shader_studio_ops import register_shader_studio_tools
 from .shape_key_ops import register_shape_key_tools
 from .studio_lighting_ops import register_studio_lighting_tools
 from .text_typography_ops import register_text_typography_tools
@@ -114,6 +117,10 @@ REGISTER_FUNCS = (
     # --- 0.9.0 Additions: Batch Execution & Non-Modal Progress HUD (103 Tools) ---
     register_batch_execution_tools,
     register_progress_hud_tools,
+    # --- 1.0.0 Additions: Shader Studio, Advanced GN & Material Slot Pipelines (113 Tools) ---
+    register_shader_studio_tools,
+    register_advanced_geom_nodes_studio_tools,
+    register_advanced_material_slot_tools,
 )
 
 
