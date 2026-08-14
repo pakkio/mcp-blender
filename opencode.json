@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "mcp-unity": {
+      "type": "local",
+      "enabled": true,
+      "command": ["node", "../mcp-unity/Server~/build/index.js"],
+      "environment": {}
+    },
+    "mcp-blender": {
+      "type": "local",
+      "enabled": true,
+      "command": ["mcp_server/.venv/Scripts/mcp-blender-pakkio.exe"],
+      "environment": {}
+    }
+  }
+}

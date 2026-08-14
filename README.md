@@ -174,6 +174,29 @@ For Claude Code, Claude Desktop, Antigravity, or Cursor:
 
 ---
 
+## 🧪 Testing & Verification
+
+The project includes a two-tier test suite:
+
+### 1. FastMCP & Mock Bridge Unit Tests (117 Tests)
+Validates tool registration, schema definitions, Pydantic argument parsing, and WebSocket protocol handling:
+
+```bash
+cd mcp_server
+pytest
+```
+
+### 2. Live In-Blender (`bpy`) Integration Tests
+Executes real Blender tool operations (`execute()`) directly inside a live headless Blender runtime across all domains (modeling, shaders, geometry nodes, camera, lighting, physics, and bridge dispatch queues):
+
+```bash
+python scripts/run_live_bpy_tests.py
+```
+
+*Note: Automatically detects your local Blender installation (or respects the `BLENDER_BIN` environment variable / `--blender-bin` argument).*
+
+---
+
 ## 📜 License
 
 MIT License -- see `LICENSE`.
