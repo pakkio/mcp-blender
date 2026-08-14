@@ -8,6 +8,7 @@ from .advanced_material_ops import register_advanced_material_tools
 from .advanced_material_slot_ops import register_advanced_material_slot_tools
 from .advanced_mesh_edit_ops import register_advanced_mesh_edit_tools
 from .animation_ops import register_animation_tools
+from .animation_render_ops import register_animation_render_tools
 from .apply_transform import register_apply_transform_tool
 from .asset_browser_ops import register_asset_browser_tools
 from .batch_execution_ops import register_batch_execution_tools
@@ -41,6 +42,7 @@ from .remesh_decimate_ops import register_remesh_decimate_tools
 from .render_effects_ops import register_render_effects_tools
 from .render_ops import register_render_tools
 from .rigging_ops import register_rigging_tools
+from .scene_diagnostics_ops import register_scene_diagnostics_tools
 from .sculpt_ops import register_sculpt_tools
 from .select_objects import register_select_objects_tool
 from .sequencer_vse_ops import register_sequencer_vse_tools
@@ -117,10 +119,12 @@ REGISTER_FUNCS = (
     # --- 0.9.0 Additions: Batch Execution & Non-Modal Progress HUD (103 Tools) ---
     register_batch_execution_tools,
     register_progress_hud_tools,
-    # --- 1.0.0 Additions: Shader Studio, Advanced GN & Material Slot Pipelines (113 Tools) ---
+    # --- 1.0.0 Additions: Shader Studio, Advanced GN, Material Slots & Diagnostics (117 Tools) ---
     register_shader_studio_tools,
     register_advanced_geom_nodes_studio_tools,
     register_advanced_material_slot_tools,
+    register_animation_render_tools,
+    register_scene_diagnostics_tools,
 )
 
 

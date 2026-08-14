@@ -13,6 +13,10 @@ from .advanced_material_slot_ops import (
 )
 from .advanced_mesh_edit_ops import AdvancedMeshEditTool, ManipulateOriginCursorTool
 from .animation_ops import DeleteKeyframeTool, SetKeyframeTool, SetTimelineRangeTool
+from .animation_render_ops import (
+    BakeObjectAnimationTool,
+    RenderAnimationSequenceTool,
+)
 from .apply_transform import ApplyTransformTool
 from .asset_browser_ops import (
     GenerateAssetPreviewTool,
@@ -93,6 +97,10 @@ from .sculpt_ops import (
     ApplySculptFilterTool,
     ConfigureSculptModeTool,
     SculptMaskFaceSetsTool,
+)
+from .scene_diagnostics_ops import (
+    InspectScenePerformanceTool,
+    SetupSkySunRigTool,
 )
 from .select_objects import SelectObjectsTool
 from .sequencer_vse_ops import (
@@ -250,7 +258,7 @@ ALL_TOOLS = (
     ExecuteBatchTool(),
     UpdateProgressHUDTool(),
     ClearProgressHUDTool(),
-    # --- 1.0.0 Additions: Shader Studio, Advanced GN & Material Slot Pipelines (113 Tools) ---
+    # --- 1.0.0 Additions: Shader Studio, Advanced GN, Material Slots & Diagnostics (117 Tools) ---
     CreateProceduralGrungeMaskTool(),
     SetupTriplanarMappingTool(),
     SetupSpecialtyShaderTool(),
@@ -261,6 +269,10 @@ ALL_TOOLS = (
     AutoLoadPBRTextureSetTool(),
     ManageMaterialSlotsTool(),
     ProjectDecalMaterialTool(),
+    InspectScenePerformanceTool(),
+    SetupSkySunRigTool(),
+    BakeObjectAnimationTool(),
+    RenderAnimationSequenceTool(),
 )
 
 TOOL_REGISTRY = {tool.name: tool for tool in ALL_TOOLS}
