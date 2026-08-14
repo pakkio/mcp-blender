@@ -21,7 +21,7 @@ class ManageShapeKeysTool(ToolBase):
         if not obj or obj.type != "MESH":
             return {"success": False, "message": f"Object '{object_name}' not found or not a MESH"}
 
-        if action in ("CREATE_BASIS", "ADD_KEY"):
+        if action in ("CREATE_BASIS", "ADD_KEY", "CREATE_SHAPE_KEY"):
             # Ensure basis exists
             if not obj.data.shape_keys:
                 obj.shape_key_add(name="Basis", from_mix=False)

@@ -29,7 +29,7 @@ class SetKeyframeTool(ToolBase):
     description = "Insert a keyframe for location, rotation, scale, or custom properties on an object at a specific frame."
 
     def execute(self, params: dict) -> dict:
-        object_name = params.get("object_name")
+        object_name = params.get("object_name") or params.get("name")
         frame = params.get("frame")
         data_path = params.get("data_path", "location")
         value = params.get("value")
@@ -86,7 +86,7 @@ class DeleteKeyframeTool(ToolBase):
     description = "Delete keyframes on an object for a specific frame or frame range."
 
     def execute(self, params: dict) -> dict:
-        object_name = params.get("object_name")
+        object_name = params.get("object_name") or params.get("name")
         frame = params.get("frame")
         data_path = params.get("data_path")
         frame_range = params.get("frame_range")

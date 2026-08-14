@@ -25,7 +25,19 @@ class UVUnwrapTool(ToolBase):
         if not obj or obj.type != "MESH":
             return {"success": False, "message": f"Object '{object_name}' not found or not a MESH"}
 
-        # Ensure object is active and in EDIT mode
+        if not obj.data.polygons or len(obj.data.vertices) == 0:
+            return {
+                "success": False,
+                "message": f"Mesh object '{object_name}' has no polygons to unwrap.",
+            }
+
+        # Ensure only target object is active, selected, and in EDIT mode
+        if bpy.context.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+        for o in bpy.context.selected_objects:
+            o.select_set(False)
+
+        obj.select_set(True)
         bpy.context.view_layer.objects.active = obj
         bpy.ops.object.mode_set(mode="EDIT")
         bpy.ops.mesh.select_all(action="SELECT")

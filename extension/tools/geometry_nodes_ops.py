@@ -193,7 +193,7 @@ class EditGeometryNodesTool(ToolBase):
         nodes = tree.nodes
         links = tree.links
 
-        if action == "GET_GRAPH_INFO":
+        if action in ("GET_GRAPH_INFO", "INSPECT", "INSPECT_TREE"):
             node_list = []
             for n in nodes:
                 node_list.append({

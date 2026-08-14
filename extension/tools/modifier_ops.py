@@ -23,9 +23,9 @@ class AddModifierTool(ToolBase):
     description = "Add a modifier (Subsurf, Bevel, Boolean, Mirror, Array, Solidify, etc.) to an object."
 
     def execute(self, params: dict) -> dict:
-        object_name = params.get("object_name")
+        object_name = params.get("object_name") or params.get("name")
         modifier_type = (params.get("modifier_type") or "").upper()
-        modifier_name = params.get("name") or modifier_type.capitalize()
+        modifier_name = params.get("modifier_name") or params.get("name") or modifier_type.capitalize()
         properties = params.get("properties") or {}
 
         if not object_name:
@@ -58,8 +58,8 @@ class ApplyModifierTool(ToolBase):
     description = "Apply a modifier permanently to an object's geometry."
 
     def execute(self, params: dict) -> dict:
-        object_name = params.get("object_name")
-        modifier_name = params.get("modifier_name")
+        object_name = params.get("object_name") or params.get("name")
+        modifier_name = params.get("modifier_name") or params.get("name")
 
         if not object_name or not modifier_name:
             return {"success": False, "message": "'object_name' and 'modifier_name' are required"}
@@ -72,32 +72,16 @@ class ApplyModifierTool(ToolBase):
         if not mod:
             return {"success": False, "message": f"Modifier '{modifier_name}' not found on '{object_name}'"}
 
-        prev_active = bpy.context.active_object
-        prev_selected = [o for o in bpy.context.selected_objects]
-
         try:
-            if bpy.context.mode != "OBJECT":
-                bpy.ops.object.mode_set(mode="OBJECT")
-
-            bpy.ops.object.select_all(action="DESELECT")
-            obj.select_set(True)
             bpy.context.view_layer.objects.active = obj
-
-            bpy.ops.object.modifier_apply(modifier=modifier_name)
+            bpy.ops.object.modifier_apply(modifier=mod.name)
         except Exception as exc:
             return {"success": False, "message": f"Failed to apply modifier '{modifier_name}': {exc}"}
-        finally:
-            bpy.ops.object.select_all(action="DESELECT")
-            for o in prev_selected:
-                if o.name in bpy.data.objects:
-                    o.select_set(True)
-            if prev_active and prev_active.name in bpy.data.objects:
-                bpy.context.view_layer.objects.active = prev_active
 
         return {
             "success": True,
-            "message": f"Applied modifier '{modifier_name}' on '{obj.name}'",
-            "object_name": obj.name,
+            "message": f"Applied modifier '{modifier_name}' on '{object_name}'",
+            "object_name": object_name,
             "modifier_name": modifier_name,
         }
 
@@ -107,8 +91,8 @@ class RemoveModifierTool(ToolBase):
     description = "Remove a modifier from an object."
 
     def execute(self, params: dict) -> dict:
-        object_name = params.get("object_name")
-        modifier_name = params.get("modifier_name")
+        object_name = params.get("object_name") or params.get("name")
+        modifier_name = params.get("modifier_name") or params.get("name")
 
         if not object_name or not modifier_name:
             return {"success": False, "message": "'object_name' and 'modifier_name' are required"}
@@ -125,8 +109,8 @@ class RemoveModifierTool(ToolBase):
 
         return {
             "success": True,
-            "message": f"Removed modifier '{modifier_name}' from '{obj.name}'",
-            "object_name": obj.name,
+            "message": f"Removed modifier '{modifier_name}' from '{object_name}'",
+            "object_name": object_name,
             "modifier_name": modifier_name,
         }
 
@@ -136,8 +120,8 @@ class SetModifierPropertiesTool(ToolBase):
     description = "Update properties on an existing modifier."
 
     def execute(self, params: dict) -> dict:
-        object_name = params.get("object_name")
-        modifier_name = params.get("modifier_name")
+        object_name = params.get("object_name") or params.get("name")
+        modifier_name = params.get("modifier_name") or params.get("name")
         properties = params.get("properties") or {}
 
         if not object_name or not modifier_name:

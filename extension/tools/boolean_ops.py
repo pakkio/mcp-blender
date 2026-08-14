@@ -34,6 +34,22 @@ class BooleanOperationTool(ToolBase):
                 "message": f"Invalid operation '{operation}'. Must be UNION, DIFFERENCE, INTERSECT, or SLICE",
             }
 
+        # Resolve solver compatibility across Blender versions
+        try:
+            valid_solvers = [
+                item.identifier
+                for item in bpy.types.BooleanModifier.bl_rna.properties["solver"].enum_items
+            ]
+            if solver not in valid_solvers:
+                if solver == "FAST":
+                    solver = "FLOAT" if "FLOAT" in valid_solvers else ("MANIFOLD" if "MANIFOLD" in valid_solvers else "EXACT")
+                elif solver in ("FLOAT", "MANIFOLD"):
+                    solver = "FAST" if "FAST" in valid_solvers else "EXACT"
+                else:
+                    solver = valid_solvers[0]
+        except Exception:
+            solver = "EXACT"
+
         # Handle SLICE as Difference on target + Intersect duplicate
         if operation == "SLICE":
             # Duplicate target for slice piece

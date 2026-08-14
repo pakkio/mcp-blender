@@ -26,6 +26,18 @@ class CreateArmatureTool(ToolBase):
 
         created_bones = []
         try:
+            if not bones_spec and "bone_names" in params:
+                bone_names = params["bone_names"]
+                positions = params.get("head_tail_positions", [])
+                bones_spec = []
+                for i, b_name in enumerate(bone_names):
+                    if i < len(positions) and len(positions[i]) == 2:
+                        h, t = positions[i]
+                    else:
+                        h, t = [0, 0, i], [0, 0, i + 1]
+                    parent_b = bone_names[i - 1] if i > 0 else None
+                    bones_spec.append({"name": b_name, "head": h, "tail": t, "parent": parent_b})
+
             if not bones_spec:
                 # Default single root bone
                 bone = arm_data.edit_bones.new("Bone")

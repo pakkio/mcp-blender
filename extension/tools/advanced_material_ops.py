@@ -25,7 +25,7 @@ class EditMaterialNodesTool(ToolBase):
         nodes = mat.node_tree.nodes
         links = mat.node_tree.links
 
-        if action == "GET_NODE_TREE":
+        if action in ("GET_NODE_TREE", "INSPECT", "INSPECT_TREE"):
             node_list = []
             for n in nodes:
                 node_list.append({
