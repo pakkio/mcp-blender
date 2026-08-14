@@ -15,9 +15,13 @@ import zipfile
 from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = Path(__file__).resolve().parent
 EXTENSION_DIR = ROOT_DIR / "extension"
 WHEELS_DIR = EXTENSION_DIR / "wheels"
 DIST_DIR = ROOT_DIR / "dist"
+
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 
 def find_blender() -> str | None:
