@@ -10,6 +10,7 @@ from .apply_transform import register_apply_transform_tool
 from .boolean_ops import register_boolean_tools
 from .camera_ops import register_camera_tools
 from .collection_ops import register_collection_tools
+from .compositor_effects_ops import register_compositor_effects_tools
 from .constraint_ops import register_constraint_tools
 from .create_object import register_create_object_tool
 from .delete_object import register_delete_object_tool
@@ -18,6 +19,7 @@ from .execute_python import register_execute_blender_python_tool
 from .geometry_nodes_ops import register_geometry_nodes_tools
 from .get_object_info import register_get_object_info_tool
 from .get_scene_info import register_get_scene_info_tool
+from .grease_pencil_ops import register_grease_pencil_tools
 from .io_ops import register_io_tools
 from .light_ops import register_light_tools
 from .material_ops import register_material_tools
@@ -25,6 +27,7 @@ from .mesh_operation import register_mesh_operation_tool
 from .modifier_ops import register_modifier_tools
 from .parent_ops import register_parent_tools
 from .pbr_bake_ops import register_pbr_bake_tools
+from .physics_simulation_ops import register_physics_simulation_tools
 from .pipeline_export_ops import register_pipeline_export_tools
 from .preference_ops import register_preference_tools
 from .remesh_decimate_ops import register_remesh_decimate_tools
@@ -36,9 +39,11 @@ from .select_objects import register_select_objects_tool
 from .set_object_properties import register_set_object_properties_tool
 from .set_object_transform import register_set_object_transform_tool
 from .shape_key_ops import register_shape_key_tools
+from .studio_lighting_ops import register_studio_lighting_tools
 from .texture_image_ops import register_texture_image_tools
 from .uv_ops import register_uv_tools
 from .viewport_scene_advanced_ops import register_viewport_scene_advanced_tools
+from .vision_feedback_ops import register_vision_feedback_tools
 from .world_environment_ops import register_world_environment_tools
 
 REGISTER_FUNCS = (
@@ -85,6 +90,12 @@ REGISTER_FUNCS = (
     register_render_effects_tools,
     register_advanced_mesh_edit_tools,
     register_viewport_scene_advanced_tools,
+    # --- Vision-in-the-Loop, Compositor, Physics, Studio Lighting & NPR ---
+    register_vision_feedback_tools,
+    register_compositor_effects_tools,
+    register_physics_simulation_tools,
+    register_studio_lighting_tools,
+    register_grease_pencil_tools,
 )
 
 

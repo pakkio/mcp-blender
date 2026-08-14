@@ -7,6 +7,10 @@ from .apply_transform import ApplyTransformTool
 from .boolean_ops import BooleanOperationTool
 from .camera_ops import CameraLookAtTool, ConfigureCameraTool, FrameObjectsTool
 from .collection_ops import ManageCollectionTool
+from .compositor_effects_ops import (
+    ConfigureCompositorEffectsTool,
+    CreateToonShaderTool,
+)
 from .constraint_ops import AddConstraintTool, AnimateCameraTurntableTool
 from .create_object import CreateObjectTool
 from .delete_object import DeleteObjectTool
@@ -19,6 +23,7 @@ from .geometry_nodes_ops import (
 )
 from .get_object_info import GetObjectInfoTool
 from .get_scene_info import GetSceneInfoTool
+from .grease_pencil_ops import SetupLineArtContourTool
 from .io_ops import ExportSceneTool, ImportFileTool
 from .light_ops import ConfigureLightTool
 from .material_ops import (
@@ -39,6 +44,11 @@ from .pbr_bake_ops import (
     BakeTexturesTool,
     CreateProceduralMaterialTool,
     SetupPBRMaterialsTool,
+)
+from .physics_simulation_ops import (
+    AddForceFieldTool,
+    SetupClothSimulationTool,
+    SetupRigidBodySimulationTool,
 )
 from .pipeline_export_ops import ExportUnityFBXTool, GenerateLODsTool
 from .preference_ops import ConfigurePreferencesTool, GetSystemInfoTool
@@ -62,12 +72,20 @@ from .select_objects import SelectObjectsTool
 from .set_object_properties import SetObjectPropertiesTool
 from .set_object_transform import SetObjectTransformTool
 from .shape_key_ops import ManageShapeKeysTool
+from .studio_lighting_ops import (
+    ConfigureLightLinkingTool,
+    CreateLightingRigTool,
+)
 from .texture_image_ops import ImportImageAsPlaneTool, ProjectImageTextureTool
 from .uv_ops import UVUnwrapTool
 from .viewport_scene_advanced_ops import (
     AlignDistributeObjectsTool,
     ConfigureViewportDisplayTool,
     PurgeOrphansAndCleanupTool,
+)
+from .vision_feedback_ops import (
+    CaptureMultiviewAuditTool,
+    InspectFocusShotTool,
 )
 from .world_environment_ops import (
     ConfigureScenePhysicsTool,
@@ -154,6 +172,17 @@ ALL_TOOLS = (
     ConfigureViewportDisplayTool(),
     PurgeOrphansAndCleanupTool(),
     AlignDistributeObjectsTool(),
+    # --- Vision-in-the-Loop, Compositor, Physics, Studio Lighting & NPR ---
+    CaptureMultiviewAuditTool(),
+    InspectFocusShotTool(),
+    ConfigureCompositorEffectsTool(),
+    CreateToonShaderTool(),
+    SetupRigidBodySimulationTool(),
+    SetupClothSimulationTool(),
+    AddForceFieldTool(),
+    CreateLightingRigTool(),
+    ConfigureLightLinkingTool(),
+    SetupLineArtContourTool(),
 )
 
 TOOL_REGISTRY = {tool.name: tool for tool in ALL_TOOLS}

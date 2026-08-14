@@ -17,44 +17,64 @@ MCP client (Claude) <--stdio--> mcp_server (pip package) <--WebSocket--> extensi
 
 ---
 
-## Tool Catalog (74 Tools)
+## Tool Catalog (84 Tools)
 
-### 1. Render Effects, AO, Raytracing & Material Transparency
+### 1. Vision-in-the-Loop AI Feedback & Inspection
+- **`capture_multiview_audit`**: Automatically renders and stitches a 4-angle visual inspection contact sheet (Front, Right Side, Top, and 3/4 Perspective) with optional base64 data URI payload for multimodal AI models (Claude 3.5/3.7, Gemini 2.0).
+- **`inspect_focus_shot`**: Frames a tight cinematic close-up camera shot directly on a specific object or vertex selection with customizable focal length (e.g. 50mm, 85mm portrait/macro).
+
+### 2. Viewport Compositor, Post-Processing & Cel Shading
+- **`configure_compositor_effects`**: Full scene Compositor post-processing pipeline: real-time GPU Viewport Compositing, Glare/Bloom (Fog Glow, Streaks, Ghosting), Lens Distortion & Chromatic Aberration, and Color Grading.
+- **`create_toon_shader`**: Procedural anime / Non-Photorealistic (NPR) cel-shading material with stepped ColorRamp shadow bands and rim lighting.
+
+### 3. Physics Simulations & Dynamics
+- **`setup_rigid_body_simulation`**: Active/Passive rigid body dynamics (Mass, Friction, Bounciness, Collision Shapes) with `settle_simulation` to naturally drop props onto surfaces.
+- **`setup_cloth_simulation`**: Fabric simulation presets (SILK, COTTON, LEATHER, DENIM, RUBBER) with pinning vertex groups and internal pressure (inflatables).
+- **`add_force_field`**: 3D physics force fields (WIND, VORTEX, TURBULENCE, FORCE, MAGNETIC) with customizable strength and flow.
+
+### 4. Cinematic Studio Lighting & Light Linking
+- **`create_lighting_rig`**: One-call studio lighting setups (`THREE_POINT_STUDIO`, `PRODUCT_SOFTBOX`, `CYBERPUNK_NEON`, `FILM_NOIR`, `WARM_GOLDEN_HOUR`) with automatic target tracking.
+- **`configure_light_linking`**: Per-object light linking and shadow linking (Blender 4.0+/5.x) to illuminate specific assets without affecting the background.
+
+### 5. Grease Pencil & Line Art NPR
+- **`setup_line_art_contour`**: Real-time cartoon ink outlines and crease edge detection using Grease Pencil Line Art modifiers.
+
+### 6. Render Effects, AO, Raytracing & Material Transparency
 - **`configure_render_effects`**: Ambient Occlusion (distance/factor), EEVEE Next Raytracing & Screen Space Reflections, Refractions, Motion Blur, Depth of Field, Volumetrics, and Film Transparency (Alpha channel rendering).
 - **`configure_material_transparency`**: Advanced glass, liquid, acrylic, and transparent shader properties (Transmission weight, Index of Refraction / IOR, Alpha blend modes, screen refraction, backface culling, roughness).
 
-### 2. Advanced Mesh Editing & Origin Manipulation
+### 7. Advanced Mesh Editing & Origin Manipulation
 - **`advanced_mesh_edit`**: Bisect plane cuts with cap fill, Bridge Edge Loops, Extrude along normals / individual faces, Edge Crease, Bevel Weights, Separate by loose parts/materials, and Join meshes.
 - **`manipulate_origin_cursor`**: 3D Cursor & origin transformation (Origin to Geometry, Origin to Cursor, Origin to Bottom bounding box for ground snapping, Origin to Center of Mass, Cursor to Selected, Set Cursor/Origin Location).
 - **`align_distribute_objects`**: Align objects along X/Y/Z axes, distribute across linear or 3D grid patterns, or snap lowest vertices to ground level (Z=0).
 
-### 3. Viewport Display, Overlays & Data Purging
+### 8. Viewport Display, Overlays & Data Purging
 - **`configure_viewport_display`**: 3D Viewport shading mode (SOLID, MATERIAL, RENDERED, WIREFRAME), studio lighting/matcaps, cavity/shadows, and overlays (face orientation normal check, wireframe, scene statistics).
 - **`purge_orphans_and_cleanup`**: Multi-pass purge of unused orphan datablocks (materials, meshes, textures, node groups, actions) and pack/unpack external file resources.
 
-### 4. Geometry Nodes Studio
+### 9. Geometry Nodes Studio
 - **`create_geometry_nodes`**: Create Geometry Nodes modifiers with production presets (`EMPTY`, `SCATTER_ON_SURFACE`, `EXTRUDE_FACES`, `SUBDIVIDE_AND_NOISE`, `CURVE_TO_TUBE`, `WIREFRAME_LATTICE`, `PROCEDURAL_GRID_ARRAY`).
 - **`edit_geometry_nodes`**: Inspect full graph structure, add/remove geometry nodes, connect sockets, and set exposed modifier parameters.
 - **`bake_geometry_nodes`**: Bake procedural geometry trees into real mesh geometry, auto-realizing instanced points.
 
-### 5. Advanced Light & Texture Baking Pipeline
+### 10. Advanced Light & Texture Baking Pipeline
 - **`bake_advanced`**: High-to-low poly baking, multi-pass baking (`NORMAL`, `COMBINED`, `DIFFUSE`, `ROUGHNESS`, `AO`, `SHADOW`, `EMISSION`), cage objects/extrusion ray distance, and direct baking to vertex color attributes.
 - **`configure_light_probe`**: Create EEVEE Light Probes (`VOLUME` / `GRID` Irradiance Volumes, `SPHERE` Reflection Probes, `PLANE` Reflection Planes) and trigger lighting cache bakes.
 
-### 6. Add-on & Extension Discovery & Control
+### 11. Add-on & Extension Discovery & Control
 - **`manage_addons`**: List, discover, enable, disable, and configure preferences for built-in and community add-ons/extensions (Rigify, Node Wrangler, LoopTools, Archimesh, glTF, FBX, etc.).
 - **`inspect_addon`**: Query complete add-on metadata: author, version, documentation links, enabled status, file path, and preference property keys.
 
-### 7. Advanced Shader Node Trees & Color Attributes
+### 12. Advanced Shader Node Trees & Color Attributes
 - **`edit_material_nodes`**: Full low-level control over shader node graphs: create custom shader nodes, connect/disconnect sockets, set socket values, and inspect material node trees.
 - **`manage_color_attributes`**: Create vertex color layers, fill solid colors, or generate procedural height/coordinate color gradients.
 
-### 8. Sculpting & Organic Modeling
+### 13. Sculpting & Organic Modeling
 - **`configure_sculpt_mode`**: Enter/exit Sculpt Mode, select active brushes (Draw, Clay, Clay Strips, Crease, Smooth, Flatten, Grab, Snake Hook, Elastic Deform, Pinch, Cloth, Scrape), configure brush radius, strength, XYZ symmetry, and Dynamic Topology (Dyntopo).
 - **`apply_sculpt_filter`**: Full-mesh sculpt deformation filters (SMOOTH, SCALE, INFLATE, SPHERE, RANDOM, RELAX, RELAX_FACE_SETS, SURFACE_SMOOTH, SHARPEN, ENHANCE_DETAILS) with customizable axis and strength.
 - **`sculpt_mask_facesets`**: Manage sculpt masks (clear, invert, smooth) and initialize Face Sets (by loose parts, materials, or mask selection).
 
-### 9. Modeling & Hard-Surface Geometry
+### 14. Modeling & Hard-Surface Geometry
 - **`boolean_operation`**: UNION, DIFFERENCE, INTERSECT, SLICE with FAST or EXACT solvers and operand cleanup.
 - **`decimate_mesh`**: High-speed polygon reduction (COLLAPSE with ratio/symmetry, UNSUBDIVIDE iterations, PLANAR angle limits).
 - **`remesh_mesh`**: Native VOXEL remesher with adaptivity and modifier-based SHARP/SMOOTH/BLOCKS remeshing.
