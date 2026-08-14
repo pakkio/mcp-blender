@@ -13,10 +13,20 @@ class SelectObjectsTool(ToolBase):
         active_object_name = params.get("active_object")
         mode = params.get("mode")
 
-        # Make sure we're in OBJECT mode before doing bulk selections if not specified
-        if bpy.context.mode != "OBJECT" and mode != bpy.context.mode:
+        original_mode = bpy.context.mode
+
+        # bpy.ops.object.select_all() requires OBJECT mode context, but
+        # per-name SELECT/DESELECT use obj.select_set() directly which
+        # works in any mode -- only force a (temporary) OBJECT-mode detour
+        # for the actions that actually need it, and restore whatever mode
+        # the caller was in afterward rather than stranding them in OBJECT
+        # mode as a side effect of a plain selection call.
+        needs_object_mode = action in ("SELECT_ALL", "DESELECT_ALL", "INVERT", "SET")
+        forced_object_mode = False
+        if needs_object_mode and bpy.context.mode != "OBJECT":
             try:
                 bpy.ops.object.mode_set(mode="OBJECT")
+                forced_object_mode = True
             except Exception:
                 pass
 
@@ -60,6 +70,15 @@ class SelectObjectsTool(ToolBase):
                     "success": False,
                     "message": f"Failed to switch to mode '{mode_upper}': {exc}",
                 }
+        elif forced_object_mode and original_mode != "OBJECT":
+            # No mode was explicitly requested -- undo the temporary OBJECT
+            # mode detour so this call doesn't leave the user's editor mode
+            # changed as an unrequested side effect.
+            restore_mode = "EDIT" if original_mode.startswith("EDIT") else original_mode
+            try:
+                bpy.ops.object.mode_set(mode=restore_mode)
+            except Exception:
+                pass
 
         selected = [obj.name for obj in bpy.context.selected_objects]
         active = bpy.context.active_object.name if bpy.context.active_object else None

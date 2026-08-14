@@ -2,7 +2,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
-from ..bridge import BlenderBridge
+from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..errors import BridgeError, ErrorType
 
 
@@ -42,7 +42,9 @@ def register_animation_render_tools(mcp: FastMCP, bridge: BlenderBridge):
             visual_keying=visual_keying,
             clear_constraints=clear_constraints,
         )
-        result = await bridge.send_request("bake_object_animation", params.model_dump())
+        result = await bridge.send_request(
+            "bake_object_animation", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S
+        )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "bake_object_animation failed"))
         return result
@@ -67,7 +69,9 @@ def register_animation_render_tools(mcp: FastMCP, bridge: BlenderBridge):
             resolution_x=resolution_x,
             resolution_y=resolution_y,
         )
-        result = await bridge.send_request("render_animation_sequence", params.model_dump())
+        result = await bridge.send_request(
+            "render_animation_sequence", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S
+        )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "render_animation_sequence failed"))
         return result

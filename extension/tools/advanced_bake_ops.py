@@ -32,9 +32,23 @@ class BakeAdvancedTool(ToolBase):
         if not target_obj or target_obj.type != "MESH":
             return {"success": False, "message": f"Target object '{target_name}' not found or not a MESH"}
 
-        # Ensure Cycles is active for bake
         scene = bpy.context.scene
+        cb = scene.render.bake
+
+        # Snapshot everything this tool mutates so it can be fully restored,
+        # whether the bake succeeds, fails, or raises.
+        prev_active = bpy.context.view_layer.objects.active
+        prev_selected = [o for o in bpy.context.selected_objects]
         orig_engine = scene.render.engine
+        orig_samples = scene.cycles.samples if hasattr(scene.cycles, "samples") else None
+        orig_denoise = scene.cycles.use_denoising if hasattr(scene.cycles, "use_denoising") else None
+        orig_use_selected_to_active = cb.use_selected_to_active
+        orig_margin = cb.margin
+        orig_cage_extrusion = cb.cage_extrusion
+        orig_cage_object = cb.cage_object
+        orig_bake_target = cb.target
+
+        # Ensure Cycles is active for bake
         scene.render.engine = "CYCLES"
         if hasattr(scene.cycles, "samples"):
             scene.cycles.samples = samples
@@ -42,7 +56,6 @@ class BakeAdvancedTool(ToolBase):
             scene.cycles.use_denoising = denoise
 
         # Configure Bake Settings
-        cb = scene.render.bake
         cb.use_selected_to_active = selected_to_active
         cb.margin = margin
         if selected_to_active:
@@ -52,12 +65,14 @@ class BakeAdvancedTool(ToolBase):
                 if c_obj:
                     cb.cage_object = c_obj
 
+        bake_node = None
+        img = None
+        mat = None
+        clean_out = None
+        baked_ok = False
+
         try:
             # Setup target image or vertex color
-            bake_node = None
-            img = None
-            clean_out = None
-
             if bake_to_vertex_colors:
                 cb.target = "VERTEX_COLORS"
                 # Ensure color attribute exists on target
@@ -100,6 +115,7 @@ class BakeAdvancedTool(ToolBase):
 
             # Perform Bake
             bpy.ops.object.bake(type=bake_type)
+            baked_ok = True
 
             file_size = 0
             if img and output_filepath:
@@ -127,6 +143,33 @@ class BakeAdvancedTool(ToolBase):
                 "baked_to_vertex_colors": bake_to_vertex_colors,
             }
         finally:
+            # On failure, discard the incomplete temp image/node rather than
+            # leaving orphaned datablocks behind; on success they're either
+            # already cleaned up (node) or intentionally kept (image).
+            if not baked_ok:
+                if bake_node and mat and bake_node.name in mat.node_tree.nodes:
+                    mat.node_tree.nodes.remove(bake_node)
+                if img and img.name in bpy.data.images:
+                    bpy.data.images.remove(img)
+
+            # Restore selection/active object
+            bpy.ops.object.select_all(action="DESELECT")
+            for o in prev_selected:
+                if o.name in bpy.data.objects:
+                    o.select_set(True)
+            if prev_active and prev_active.name in bpy.data.objects:
+                bpy.context.view_layer.objects.active = prev_active
+
+            # Restore scene/cycles/bake settings
+            cb.use_selected_to_active = orig_use_selected_to_active
+            cb.margin = orig_margin
+            cb.cage_extrusion = orig_cage_extrusion
+            cb.cage_object = orig_cage_object
+            cb.target = orig_bake_target
+            if orig_samples is not None:
+                scene.cycles.samples = orig_samples
+            if orig_denoise is not None:
+                scene.cycles.use_denoising = orig_denoise
             scene.render.engine = orig_engine
 
 

@@ -30,6 +30,24 @@ from .. import config
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_S = 15.0
+# Must stay >= the mcp_server-side HEAVY_REQUEST_TIMEOUT_S (mcp_server/src/
+# mcp_blender_pakkio/bridge.py) -- otherwise this side gives up and reports
+# a timeout to the client before the mcp_server-side wait would have, even
+# though Blender is still working. Kept as a superset of tool names rather
+# than an exact mirror since new-but-similarly-heavy tools default safely
+# to the short timeout if omitted here (fail fast) rather than the long one.
+HEAVY_REQUEST_TIMEOUT_S = 600.0
+HEAVY_METHODS = frozenset({
+    "bake_advanced",
+    "configure_light_probe",
+    "bake_textures",
+    "bake_fluid_domain",
+    "bake_geometry_nodes",
+    "bake_object_animation",
+    "render_scene",
+    "render_animation_sequence",
+    "execute_batch",
+})
 
 _loop: Optional[asyncio.AbstractEventLoop] = None
 _thread: Optional[threading.Thread] = None
@@ -74,9 +92,10 @@ async def _handle_client(websocket) -> None:
             continue
 
         future = dispatch.enqueue(request_id, method, params)
+        timeout = HEAVY_REQUEST_TIMEOUT_S if method in HEAVY_METHODS else REQUEST_TIMEOUT_S
         try:
             envelope = await asyncio.wait_for(
-                asyncio.wrap_future(future), timeout=REQUEST_TIMEOUT_S
+                asyncio.wrap_future(future), timeout=timeout
             )
         except asyncio.TimeoutError:
             envelope = protocol.error_envelope(

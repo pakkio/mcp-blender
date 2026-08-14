@@ -2,7 +2,7 @@ from typing import Literal, Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
-from ..bridge import BlenderBridge
+from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..errors import BridgeError, ErrorType
 
 AdvancedBakeType = Literal[
@@ -83,7 +83,9 @@ def register_advanced_bake_tools(mcp: FastMCP, bridge: BlenderBridge):
             samples=samples,
             denoise=denoise,
         )
-        result = await bridge.send_request("bake_advanced", params.model_dump())
+        result = await bridge.send_request(
+            "bake_advanced", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S
+        )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "bake_advanced failed"))
         return result
@@ -108,7 +110,9 @@ def register_advanced_bake_tools(mcp: FastMCP, bridge: BlenderBridge):
             influence_distance=influence_distance,
             bake_cache=bake_cache,
         )
-        result = await bridge.send_request("configure_light_probe", params.model_dump())
+        result = await bridge.send_request(
+            "configure_light_probe", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S
+        )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "configure_light_probe failed"))
         return result

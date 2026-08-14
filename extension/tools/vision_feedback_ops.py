@@ -54,10 +54,23 @@ class CaptureMultiviewAuditTool(ToolBase):
         temp_dir = tempfile.gettempdir()
         rendered_images = []
 
+        # half*2 (rather than the raw `resolution`) is what the composite
+        # canvas is sized to below, so it always exactly matches the pixel
+        # dimensions of the 4 captured quadrants even when `resolution` is
+        # odd. resolution_percentage is pinned to 100 for the same reason:
+        # otherwise the actual rendered-out PNG dimensions silently diverge
+        # from resolution_x/y and the quadrant pixel-copy loop reads the
+        # wrong offsets.
+        half = resolution // 2
+        composite_size = half * 2
+
         orig_res_x = scene.render.resolution_x
         orig_res_y = scene.render.resolution_y
-        scene.render.resolution_x = resolution // 2
-        scene.render.resolution_y = resolution // 2
+        orig_res_pct = scene.render.resolution_percentage
+        orig_filepath = scene.render.filepath
+        scene.render.resolution_x = half
+        scene.render.resolution_y = half
+        scene.render.resolution_percentage = 100
 
         try:
             for view_name, offset in views:
@@ -87,14 +100,13 @@ class CaptureMultiviewAuditTool(ToolBase):
             # Load captured images and compose into 2x2 grid image
             composite_img = bpy.data.images.new(
                 "AuditComposite",
-                width=resolution,
-                height=resolution,
+                width=composite_size,
+                height=composite_size,
                 alpha=True,
             )
 
             # Read pixels from the 4 rendered quadrants
-            half = resolution // 2
-            pixels = [0.0] * (resolution * resolution * 4)
+            pixels = [0.0] * (composite_size * composite_size * 4)
 
             # Positions in 2x2: (0: Top-Left=Persp, 1: Top-Right=Front, 2: Bottom-Left=Right, 3: Bottom-Right=Top)
             quadrant_offsets = [(0, half), (half, half), (0, 0), (half, 0)]
@@ -104,14 +116,21 @@ class CaptureMultiviewAuditTool(ToolBase):
                     break
                 sub_img = bpy.data.images.load(img_path)
                 sub_px = list(sub_img.pixels)
+                # Read the source's actual dimensions rather than assuming
+                # `half` -- with resolution_percentage pinned to 100 above
+                # they now always match, but this keeps the copy from
+                # silently misaligning rows if that ever stops being true.
+                src_w, src_h = sub_img.size
                 qx, qy = quadrant_offsets[idx]
+                copy_w = min(src_w, half)
+                copy_h = min(src_h, half)
 
-                for y in range(half):
-                    for x in range(half):
-                        src_idx = (y * half + x) * 4
+                for y in range(copy_h):
+                    for x in range(copy_w):
+                        src_idx = (y * src_w + x) * 4
                         dst_x = qx + x
                         dst_y = qy + y
-                        dst_idx = (dst_y * resolution + dst_x) * 4
+                        dst_idx = (dst_y * composite_size + dst_x) * 4
                         if src_idx + 3 < len(sub_px) and dst_idx + 3 < len(pixels):
                             pixels[dst_idx : dst_idx + 4] = sub_px[src_idx : src_idx + 4]
 
@@ -132,13 +151,22 @@ class CaptureMultiviewAuditTool(ToolBase):
                 "success": True,
                 "message": f"Generated 4-view visual audit contact sheet: '{final_out}'",
                 "output_filepath": final_out,
-                "resolution": [resolution, resolution],
+                "resolution": [composite_size, composite_size],
                 "views": [v[0] for v in rendered_images],
                 "base64_data_uri": b64_data,
             }
         finally:
+            for _, img_path in rendered_images:
+                try:
+                    if os.path.isfile(img_path):
+                        os.remove(img_path)
+                except OSError:
+                    pass
+
             scene.render.resolution_x = orig_res_x
             scene.render.resolution_y = orig_res_y
+            scene.render.resolution_percentage = orig_res_pct
+            scene.render.filepath = orig_filepath
             scene.camera = orig_cam
             if audit_cam:
                 bpy.data.objects.remove(audit_cam)
@@ -171,40 +199,43 @@ class InspectFocusShotTool(ToolBase):
         scene.collection.objects.link(cam_obj)
 
         orig_cam = scene.camera
+        orig_filepath = scene.render.filepath
         scene.camera = cam_obj
 
-        bbox = [obj.matrix_world @ Vector(b) for b in obj.bound_box]
-        center = sum(bbox, Vector((0, 0, 0))) / 8.0
-        radius = max((b - center).length for b in bbox) or 1.5
+        try:
+            bbox = [obj.matrix_world @ Vector(b) for b in obj.bound_box]
+            center = sum(bbox, Vector((0, 0, 0))) / 8.0
+            radius = max((b - center).length for b in bbox) or 1.5
 
-        dist = radius * (focal_length / 24.0) * 1.4
+            dist = radius * (focal_length / 24.0) * 1.4
 
-        el_rad = math.radians(angle_elevation)
-        az_rad = math.radians(angle_azimuth)
+            el_rad = math.radians(angle_elevation)
+            az_rad = math.radians(angle_azimuth)
 
-        cam_x = center.x + dist * math.cos(el_rad) * math.sin(az_rad)
-        cam_y = center.y - dist * math.cos(el_rad) * math.cos(az_rad)
-        cam_z = center.z + dist * math.sin(el_rad)
+            cam_x = center.x + dist * math.cos(el_rad) * math.sin(az_rad)
+            cam_y = center.y - dist * math.cos(el_rad) * math.cos(az_rad)
+            cam_z = center.z + dist * math.sin(el_rad)
 
-        cam_obj.location = (cam_x, cam_y, cam_z)
-        direction = center - cam_obj.location
-        rot_quat = direction.to_track_quat("-Z", "Y")
-        cam_obj.rotation_euler = rot_quat.to_euler()
+            cam_obj.location = (cam_x, cam_y, cam_z)
+            direction = center - cam_obj.location
+            rot_quat = direction.to_track_quat("-Z", "Y")
+            cam_obj.rotation_euler = rot_quat.to_euler()
 
-        final_out = output_filepath or os.path.join(tempfile.gettempdir(), f"mcp_focus_{target_name}.png")
-        final_out = os.path.abspath(os.path.expanduser(final_out))
+            final_out = output_filepath or os.path.join(tempfile.gettempdir(), f"mcp_focus_{target_name}.png")
+            final_out = os.path.abspath(os.path.expanduser(final_out))
 
-        scene.render.filepath = final_out
-        bpy.ops.render.opengl(write_still=True)
+            scene.render.filepath = final_out
+            bpy.ops.render.opengl(write_still=True)
 
-        scene.camera = orig_cam
-        bpy.data.objects.remove(cam_obj)
-        bpy.data.cameras.remove(cam_data)
-
-        return {
-            "success": True,
-            "message": f"Captured focus shot for '{target_name}' at {focal_length}mm -> '{final_out}'",
-            "target_object": target_name,
-            "focal_length": focal_length,
-            "output_filepath": final_out,
-        }
+            return {
+                "success": True,
+                "message": f"Captured focus shot for '{target_name}' at {focal_length}mm -> '{final_out}'",
+                "target_object": target_name,
+                "focal_length": focal_length,
+                "output_filepath": final_out,
+            }
+        finally:
+            scene.camera = orig_cam
+            scene.render.filepath = orig_filepath
+            bpy.data.objects.remove(cam_obj)
+            bpy.data.cameras.remove(cam_data)

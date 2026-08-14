@@ -6,6 +6,45 @@ import bpy
 from .base import ToolBase
 
 
+def _process_memory_mb():
+    """Best-effort resident memory of this Blender process, in MB, or None
+    if unavailable. Uses only the stdlib so it works without psutil."""
+    try:
+        if platform.system() == "Windows":
+            import ctypes
+            from ctypes import wintypes
+
+            class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            counters = PROCESS_MEMORY_COUNTERS()
+            counters.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS)
+            handle = ctypes.windll.kernel32.GetCurrentProcess()
+            if ctypes.windll.psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+                return round(counters.WorkingSetSize / (1024 * 1024), 2)
+            return None
+        else:
+            import resource
+
+            ru_maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            # ru_maxrss is KB on Linux, bytes on macOS
+            divisor = 1024 if platform.system() == "Linux" else (1024 * 1024)
+            return round(ru_maxrss / divisor, 2)
+    except Exception:
+        return None
+
+
 class ConfigurePreferencesTool(ToolBase):
     name = "configure_preferences"
     description = "Configure Blender User Preferences (Cycles compute devices like CUDA/OptiX/Metal/HIP, undo memory/steps, autosave interval, view rotation method) with optional disk persistence."
@@ -104,14 +143,6 @@ class GetSystemInfoTool(ToolBase):
                         "use": getattr(d, "use", False),
                     })
 
-        # Memory info
-        memory_stats = {}
-        try:
-            import bmesh
-            memory_stats["blender_memory_allocated_mb"] = round(bpy.app.debug_value if hasattr(bpy.app, "debug_value") else 0, 2)
-        except Exception:
-            pass
-
         return {
             "success": True,
             "blender_version": bpy.app.version_string,
@@ -121,6 +152,7 @@ class GetSystemInfoTool(ToolBase):
             "os_release": platform.release(),
             "python_version": sys.version.split()[0],
             "cpu_threads": os.cpu_count(),
+            "process_memory_mb": _process_memory_mb(),
             "compute_devices": devices,
             "active_workspace": bpy.context.workspace.name if hasattr(bpy.context, "workspace") else None,
             "workspaces": [w.name for w in bpy.data.workspaces],

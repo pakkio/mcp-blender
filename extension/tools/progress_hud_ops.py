@@ -145,6 +145,15 @@ def _ensure_draw_handler():
         )
 
 
+def remove_draw_handler():
+    """Called from extension unregister() so disable/"Reload Scripts" doesn't
+    accumulate a new draw handler on every re-register."""
+    global _DRAW_HANDLER
+    if _DRAW_HANDLER is not None:
+        bpy.types.SpaceView3D.draw_handler_remove(_DRAW_HANDLER, "WINDOW")
+        _DRAW_HANDLER = None
+
+
 class UpdateProgressHUDTool(ToolBase):
     name = "update_progress_hud"
     description = "Display or update a non-modal floating progress HUD card in Blender with progress percentage (0-100%), task title, status, and detailed step explanations without blocking user interaction."

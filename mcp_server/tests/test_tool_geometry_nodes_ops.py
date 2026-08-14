@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
+from mcp_blender_pakkio.bridge import HEAVY_REQUEST_TIMEOUT_S
 from mcp_blender_pakkio.tools.geometry_nodes_ops import register_geometry_nodes_tools
 
 
@@ -87,5 +88,6 @@ async def test_bake_geometry_nodes_happy_path():
             "object_name": "Terrain",
             "modifier_name": "GeometryNodes",
         },
+        timeout=HEAVY_REQUEST_TIMEOUT_S,
     )
     assert result["result_vertices"] == 1200

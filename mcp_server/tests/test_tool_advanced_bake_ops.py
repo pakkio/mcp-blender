@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
+from mcp_blender_pakkio.bridge import HEAVY_REQUEST_TIMEOUT_S
 from mcp_blender_pakkio.tools.advanced_bake_ops import register_advanced_bake_tools
 
 
@@ -41,6 +42,7 @@ async def test_bake_advanced_happy_path():
             "samples": 32,
             "denoise": False,
         },
+        timeout=HEAVY_REQUEST_TIMEOUT_S,
     )
     assert result["bake_type"] == "NORMAL"
 
@@ -71,5 +73,6 @@ async def test_configure_light_probe_happy_path():
             "influence_distance": 5.0,
             "bake_cache": False,
         },
+        timeout=HEAVY_REQUEST_TIMEOUT_S,
     )
     assert result["probe_name"] == "VolumeProbe"

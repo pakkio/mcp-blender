@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
+from mcp_blender_pakkio.bridge import HEAVY_REQUEST_TIMEOUT_S
 from mcp_blender_pakkio.tools.render_ops import register_render_tools
 
 
@@ -30,6 +31,7 @@ async def test_render_scene_happy_path():
             "animation": False,
             "return_image_base64": False,
         },
+        timeout=HEAVY_REQUEST_TIMEOUT_S,
     )
     assert result["output_path"] == "C:/tmp/render.png"
 

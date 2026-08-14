@@ -2,7 +2,7 @@ from typing import Literal, Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
-from ..bridge import BlenderBridge
+from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..errors import BridgeError, ErrorType
 
 FluidDomainType = Literal["GAS", "LIQUID"]
@@ -97,7 +97,9 @@ def register_volumetric_vdb_tools(mcp: FastMCP, bridge: BlenderBridge):
             domain_type=domain_type,
             resolution_max=resolution_max,
         )
-        result = await bridge.send_request("bake_fluid_domain", params.model_dump())
+        result = await bridge.send_request(
+            "bake_fluid_domain", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S
+        )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "bake_fluid_domain failed"))
         return result

@@ -26,6 +26,10 @@ from ..tools import TOOL_REGISTRY
 _queue: "queue.Queue[QueuedRequest]" = queue.Queue()
 _generation = 0
 
+_ACTIVE_INTERVAL_S = 0.05
+_MAX_IDLE_INTERVAL_S = 0.3
+_idle_streak = 0
+
 
 @dataclass
 class QueuedRequest:
@@ -57,14 +61,31 @@ def enqueue(request_id, method: str, params: dict) -> Future:
 
 
 def drain_queue() -> float:
-    """bpy.app.timers callback. Must return a float to stay registered."""
+    """bpy.app.timers callback. Must return a float to stay registered.
+
+    Polls at _ACTIVE_INTERVAL_S (20Hz) whenever there's real work, but backs
+    off gradually up to _MAX_IDLE_INTERVAL_S while the queue stays empty --
+    bpy.app.timers has no way to be woken early by the background WebSocket
+    thread enqueueing work, so this only trades a bit of idle-to-first-poll
+    latency (well under human-perceptible) for far fewer needless wakeups
+    during long idle stretches.
+    """
+    global _idle_streak
+    processed = False
     while True:
         try:
             item = _queue.get_nowait()
         except queue.Empty:
             break
+        processed = True
         _handle_item(item)
-    return 0.05
+
+    if processed:
+        _idle_streak = 0
+        return _ACTIVE_INTERVAL_S
+
+    _idle_streak += 1
+    return min(_ACTIVE_INTERVAL_S * (1 + _idle_streak * 0.5), _MAX_IDLE_INTERVAL_S)
 
 
 def _handle_item(item: QueuedRequest) -> None:

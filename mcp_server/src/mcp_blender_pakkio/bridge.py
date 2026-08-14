@@ -24,6 +24,9 @@ from .errors import BridgeError, ErrorType
 logger = logging.getLogger(__name__)
 
 DEFAULT_REQUEST_TIMEOUT_S = 15.0
+# Bake/render/batch/fluid-sim operations can legitimately run for minutes;
+# tool wrappers for those methods pass this explicitly to send_request().
+HEAVY_REQUEST_TIMEOUT_S = 600.0
 MIN_RECONNECT_DELAY_S = 1.0
 MAX_RECONNECT_DELAY_S = 30.0
 RECONNECT_MULTIPLIER = 2.0
@@ -68,7 +71,7 @@ class BlenderBridge:
         self._state = ConnectionState.CONNECTING
         try:
             self._ws = await websockets.connect(self.url, open_timeout=self._request_timeout)
-        except OSError as exc:
+        except (OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError) as exc:
             self._state = ConnectionState.DISCONNECTED
             raise BridgeError(
                 ErrorType.CONNECTION, f"Could not connect to Blender bridge at {self.url}: {exc}"
@@ -121,7 +124,13 @@ class BlenderBridge:
             try:
                 await self._connect_once()
                 return
-            except BridgeError:
+            except Exception:
+                # Catch broadly: any failure during reconnect (BridgeError,
+                # or anything _connect_once didn't anticipate) must retry
+                # with backoff rather than let this task die silently and
+                # strand the connection in RECONNECTING forever.
+                logger.warning("Reconnect attempt to %s failed, retrying in %.1fs", self.url, delay)
+                self._state = ConnectionState.RECONNECTING
                 delay = min(delay * RECONNECT_MULTIPLIER, MAX_RECONNECT_DELAY_S)
 
     async def send_request(self, method: str, params: dict, timeout: Optional[float] = None) -> dict:

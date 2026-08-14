@@ -276,18 +276,41 @@ class EditGeometryNodesTool(ToolBase):
             input_name = params.get("input_name")
             val = params.get("input_value")
 
-            # Look up socket on modifier
-            for key in mod.keys():
-                if input_name and input_name.lower() in key.lower():
-                    mod[key] = val
-                    return {
-                        "success": True,
-                        "message": f"Set modifier input '{key}' to {val}",
-                        "key": key,
-                        "value": val,
-                    }
+            if not input_name:
+                return {"success": False, "message": "'input_name' is required for SET_INPUT_VALUE"}
 
-            return {"success": False, "message": f"Input socket matching '{input_name}' not found on modifier '{mod_name}'"}
+            # Modifier IDProperty keys are non-human socket identifiers
+            # (e.g. "Input_2"), not socket names -- resolve the identifier
+            # via the node tree's interface first, exact-matched (case-
+            # insensitively) against the socket's real name, rather than
+            # substring-matching the identifiers directly (which could
+            # match the wrong socket, e.g. "scale" inside "Input_2").
+            identifier = None
+            if hasattr(tree, "interface"):
+                for item in tree.interface.items_tree:
+                    if (
+                        getattr(item, "item_type", None) == "SOCKET"
+                        and getattr(item, "in_out", None) == "INPUT"
+                        and item.name.lower() == input_name.lower()
+                    ):
+                        identifier = item.identifier
+                        break
+            elif hasattr(tree, "inputs"):
+                for sock in tree.inputs:
+                    if sock.name.lower() == input_name.lower():
+                        identifier = sock.identifier
+                        break
+
+            if identifier is None or identifier not in mod:
+                return {"success": False, "message": f"Input socket matching '{input_name}' not found on modifier '{mod_name}'"}
+
+            mod[identifier] = val
+            return {
+                "success": True,
+                "message": f"Set modifier input '{input_name}' ({identifier}) to {val}",
+                "key": identifier,
+                "value": val,
+            }
 
         else:
             return {"success": False, "message": f"Unknown action '{action}'"}

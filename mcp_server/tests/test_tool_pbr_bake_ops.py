@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
+from mcp_blender_pakkio.bridge import HEAVY_REQUEST_TIMEOUT_S
 from mcp_blender_pakkio.tools.pbr_bake_ops import register_pbr_bake_tools
 
 
@@ -97,5 +98,6 @@ async def test_bake_textures_happy_path():
             "height": 1024,
             "samples": 16,
         },
+        timeout=HEAVY_REQUEST_TIMEOUT_S,
     )
     assert result["bake_type"] == "NORMAL"

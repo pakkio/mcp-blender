@@ -19,26 +19,50 @@ class AutoLoadPBRTextureSetTool(ToolBase):
         files = os.listdir(folder_path)
         valid_exts = {".png", ".jpg", ".jpeg", ".exr", ".tif", ".tiff", ".tga"}
 
+        # Match whole filename tokens, not bare substrings -- a plain
+        # `"met" in name_lower` check false-positives on e.g. "Helmet.png",
+        # and short tokens like "col"/"nor" collide with ordinary words.
+        # Splitting the stem into alnum tokens and padding with "_" lets a
+        # multi-word keyword like "base_color" match two adjacent tokens
+        # while still requiring exact token boundaries for single-word ones.
+        category_keywords = [
+            ("base_color", ["basecolor", "base_color", "albedo", "diffuse", "color"]),
+            ("roughness", ["roughness", "rough", "rgh"]),
+            ("metallic", ["metallic", "metalness", "metal"]),
+            ("normal", ["normal", "norm", "nrm"]),
+            ("displacement", ["height", "displacement", "disp", "bump"]),
+            ("ao", ["ambient_occlusion", "ao", "occlusion"]),
+        ]
+
         detected_maps = {}
         for f in files:
             ext = os.path.splitext(f)[1].lower()
             if ext not in valid_exts:
                 continue
-            name_lower = f.lower()
+            stem = os.path.splitext(f)[0]
+            # Split camelCase boundaries too (e.g. "AmbientOcclusion") so
+            # concatenated-word filenames tokenize the same as
+            # underscore/hyphen-separated ones.
+            stem = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", stem)
+            tokens = re.findall(r"[a-z0-9]+", stem.lower())
+            padded = "_" + "_".join(tokens) + "_"
             full_path = os.path.join(folder_path, f)
 
-            if any(k in name_lower for k in ["basecolor", "base_color", "albedo", "diffuse", "col", "color"]):
-                detected_maps["base_color"] = full_path
-            elif any(k in name_lower for k in ["roughness", "rough", "rgh"]):
-                detected_maps["roughness"] = full_path
-            elif any(k in name_lower for k in ["metallic", "metalness", "metal", "met"]):
-                detected_maps["metallic"] = full_path
-            elif any(k in name_lower for k in ["normal", "norm", "nor", "nrm"]):
-                detected_maps["normal"] = full_path
-            elif any(k in name_lower for k in ["height", "displacement", "disp", "bump"]):
-                detected_maps["displacement"] = full_path
-            elif any(k in name_lower for k in ["ambient_occlusion", "ao", "occlusion"]):
-                detected_maps["ao"] = full_path
+            # A filename can legitimately contain more than one category's
+            # keyword (e.g. "Metal_Normal.png"); the match that occurs
+            # latest in the filename wins, matching the PBR convention of
+            # suffixing the map type at the end of the name.
+            best_category = None
+            best_pos = -1
+            for category, keywords in category_keywords:
+                for kw in keywords:
+                    pos = padded.rfind(f"_{kw}_")
+                    if pos > best_pos:
+                        best_pos = pos
+                        best_category = category
+
+            if best_category:
+                detected_maps[best_category] = full_path
 
         # Create Material
         mat = bpy.data.materials.get(material_name)

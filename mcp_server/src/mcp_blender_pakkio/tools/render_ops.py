@@ -2,7 +2,7 @@ from typing import Literal, Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
-from ..bridge import BlenderBridge
+from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..errors import BridgeError, ErrorType
 
 RenderEngineType = Literal["BLENDER_EEVEE_NEXT", "CYCLES", "BLENDER_WORKBENCH", "BLENDER_EEVEE"]
@@ -64,7 +64,9 @@ def register_render_tools(mcp: FastMCP, bridge: BlenderBridge):
             animation=animation,
             return_image_base64=return_image_base64,
         )
-        result = await bridge.send_request("render_scene", params.model_dump())
+        result = await bridge.send_request(
+            "render_scene", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S
+        )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "render_scene failed"))
         return result

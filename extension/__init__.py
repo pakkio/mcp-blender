@@ -11,7 +11,7 @@ is the entire lifecycle surface that matters.
 bl_info = {
     "name": "MCP Bridge Pakkio",
     "author": "Claudio Pacchiega",
-    "version": (0, 1, 0),
+    "version": (1, 0, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > MCP Bridge",
     "description": "WebSocket bridge exposing Blender to MCP clients like Claude",
@@ -43,6 +43,7 @@ ADDON_PACKAGE = __package__
 from . import config  # noqa: E402
 from .bridge import dispatch, start_server, stop_server  # noqa: E402
 from .panels import CLASSES  # noqa: E402
+from .tools.progress_hud_ops import remove_draw_handler  # noqa: E402
 
 
 _TIMER_REGISTERED = False
@@ -72,6 +73,8 @@ def unregister() -> None:
     if _TIMER_REGISTERED and bpy.app.timers.is_registered(dispatch.drain_queue):
         bpy.app.timers.unregister(dispatch.drain_queue)
     _TIMER_REGISTERED = False
+
+    remove_draw_handler()
 
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)

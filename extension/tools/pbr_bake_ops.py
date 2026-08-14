@@ -288,11 +288,23 @@ class BakeTexturesTool(ToolBase):
         if not obj.data.materials or not obj.data.materials[0]:
             return {"success": False, "message": f"Object '{object_name}' has no materials to bake"}
 
-        # Switch to Cycles for baking
-        orig_engine = bpy.context.scene.render.engine
-        bpy.context.scene.render.engine = "CYCLES"
-        if hasattr(bpy.context.scene.cycles, "samples"):
-            bpy.context.scene.cycles.samples = samples
+        scene = bpy.context.scene
+
+        # Snapshot everything this tool mutates so it can be fully restored,
+        # whether the bake succeeds, fails, or raises.
+        prev_active = bpy.context.view_layer.objects.active
+        prev_selected = [o for o in bpy.context.selected_objects]
+        orig_engine = scene.render.engine
+        orig_samples = scene.cycles.samples if hasattr(scene.cycles, "samples") else None
+
+        scene.render.engine = "CYCLES"
+        if hasattr(scene.cycles, "samples"):
+            scene.cycles.samples = samples
+
+        img = None
+        bake_node = None
+        mat = obj.data.materials[0]
+        baked_ok = False
 
         try:
             # Create target bake image
@@ -300,17 +312,18 @@ class BakeTexturesTool(ToolBase):
             img = bpy.data.images.new(name=img_name, width=width, height=height)
 
             # Insert Image Texture node into object's active material as bake target
-            mat = obj.data.materials[0]
             mat.use_nodes = True
             bake_node = mat.node_tree.nodes.new("ShaderNodeTexImage")
             bake_node.image = img
             mat.node_tree.nodes.active = bake_node
 
-            bpy.context.view_layer.objects.active = obj
+            bpy.ops.object.select_all(action="DESELECT")
             obj.select_set(True)
+            bpy.context.view_layer.objects.active = obj
 
             # Perform Bake
             bpy.ops.object.bake(type=bake_type)
+            baked_ok = True
 
             # Save image
             clean_path = os.path.abspath(os.path.expanduser(output_filepath))
@@ -331,4 +344,21 @@ class BakeTexturesTool(ToolBase):
                 "resolution": [width, height],
             }
         finally:
-            bpy.context.scene.render.engine = orig_engine
+            # On failure, discard the incomplete temp image/node rather than
+            # leaving orphaned datablocks behind.
+            if not baked_ok:
+                if bake_node and bake_node.name in mat.node_tree.nodes:
+                    mat.node_tree.nodes.remove(bake_node)
+                if img and img.name in bpy.data.images:
+                    bpy.data.images.remove(img)
+
+            bpy.ops.object.select_all(action="DESELECT")
+            for o in prev_selected:
+                if o.name in bpy.data.objects:
+                    o.select_set(True)
+            if prev_active and prev_active.name in bpy.data.objects:
+                bpy.context.view_layer.objects.active = prev_active
+
+            if orig_samples is not None:
+                scene.cycles.samples = orig_samples
+            scene.render.engine = orig_engine

@@ -27,8 +27,8 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 | **Total Tool Count** | ~5 to 15 basic tools | **117 Native Structured FastMCP Tools** |
 | **Architecture** | Legacy Blender 2.8/3.x zip addons | **Blender 4.2+ & 5.2+ Native Extension System** |
 | **Multimodal Vision Feedback** | ❌ None (blind execution) |  **`capture_multiview_audit`** (4-angle contact sheets with bounding metrics + inline Base64 data URIs) + **`inspect_focus_shot`** |
-| **Batch Latency Optimization** | ❌ Slow roundtrips (1 tool/turn) |  **`execute_batch`** (Executes 50+ actions in a single $5\text{ms}$ roundtrip with auto-rollback) |
-| **Non-Modal Progress HUD** | ❌ None / Freezes UI |  **`update_progress_hud`** (Real-time 60fps GPU 2D floating glass card with progress % and live task logs) |
+| **Batch Latency Optimization** | ❌ Slow roundtrips (1 tool/turn) |  **`execute_batch`** (Executes 50+ actions in a single roundtrip with stop-on-error/optional-step control and per-step reporting) |
+| **Non-Modal Progress HUD** | ❌ None / Freezes UI |  **`update_progress_hud`** (Real-time GPU 2D floating glass card with progress % and live task logs) |
 | **Geometry Nodes Studio** | ❌ None |  **Procedural graphs, Point scattering, Curve profiling, VDB volume remeshing, Proximity effectors** |
 | **Shader & Material Studio** | ❌ Flat single colors |  **Procedural edge-wear grunge masks, Triplanar box mapping, Auto-PBR texture folder loader, Specialty shaders (Car Paint, SSS Skin, Iridescence, Hologram, Dispersion)** |
 | **Physics & Dynamics** | ❌ None |  **Rigid body auto-settling drop simulations, Cloth presets (Silk, Leather, Denim), Force fields, Mantaflow smoke domains** |
@@ -53,7 +53,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 ## 🛠️ Complete Tool Catalog (117 Tools across 18 Domains)
 
 ### 1. Batch Execution & Non-Modal Progress HUD
-- **`execute_batch`**: Single-roundtrip multi-tool pipeline execution with auto-rollback and per-step output logging.
+- **`execute_batch`**: Single-roundtrip multi-tool pipeline execution with stop-on-error/optional-step control and per-step output logging.
 - **`update_progress_hud`**: Floating 2D glass HUD card in 3D Viewport displaying live progress percentage ($0-100\%$), step counters, and detailed task history without blocking the user.
 - **`clear_progress_hud`**: Hides and resets the non-modal status HUD.
 

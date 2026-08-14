@@ -7,7 +7,7 @@ from .progress_hud_ops import HUD_STATE, _ensure_draw_handler
 
 class ExecuteBatchTool(ToolBase):
     name = "execute_batch"
-    description = "Execute a sequence of multiple MCP tool operations in a single optimized batch roundtrip with real-time HUD progress updates, error rollback, and comprehensive per-step reporting."
+    description = "Execute a sequence of multiple MCP tool operations in a single optimized batch roundtrip with real-time HUD progress updates, stop-on-error/optional-step control, and comprehensive per-step reporting."
 
     def execute(self, params: dict) -> dict:
         commands = params.get("commands", [])
@@ -18,7 +18,7 @@ class ExecuteBatchTool(ToolBase):
         if not commands:
             return {"success": False, "message": "No commands provided in batch"}
 
-        from bl_ext.user_default.mcp_bridge_pakkio.bridge.dispatch import TOOL_REGISTRY
+        from ..bridge.dispatch import TOOL_REGISTRY
 
         results = []
         total = len(commands)

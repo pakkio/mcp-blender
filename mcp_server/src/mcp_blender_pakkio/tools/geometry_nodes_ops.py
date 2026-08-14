@@ -2,7 +2,7 @@ from typing import Any, Literal, Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
-from ..bridge import BlenderBridge
+from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..errors import BridgeError, ErrorType
 
 GeometryNodesPreset = Literal[
@@ -121,7 +121,9 @@ def register_geometry_nodes_tools(mcp: FastMCP, bridge: BlenderBridge):
             object_name=object_name,
             modifier_name=modifier_name,
         )
-        result = await bridge.send_request("bake_geometry_nodes", params.model_dump())
+        result = await bridge.send_request(
+            "bake_geometry_nodes", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S
+        )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "bake_geometry_nodes failed"))
         return result

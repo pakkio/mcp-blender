@@ -2,7 +2,7 @@ from typing import Literal, Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
-from ..bridge import BlenderBridge
+from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..errors import BridgeError, ErrorType
 
 ProceduralPattern = Literal["NOISE", "VORONOI", "WAVE", "BRICK", "CHECKER", "GRADIENT"]
@@ -131,7 +131,9 @@ def register_pbr_bake_tools(mcp: FastMCP, bridge: BlenderBridge):
             height=height,
             samples=samples,
         )
-        result = await bridge.send_request("bake_textures", params.model_dump())
+        result = await bridge.send_request(
+            "bake_textures", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S
+        )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "bake_textures failed"))
         return result
