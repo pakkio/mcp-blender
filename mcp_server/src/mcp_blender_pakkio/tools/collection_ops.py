@@ -21,7 +21,8 @@ class ManageCollectionParams(BaseModel):
 def register_collection_tools(mcp: FastMCP, bridge: BlenderBridge):
     @mcp.tool(
         name="manage_collection",
-        description="Create, delete, rename collections, link/unlink objects, nest collections, or toggle viewport/render visibility.",
+        description="Create, delete, rename collections, link/unlink objects, nest collections, or toggle viewport/render visibility. "
+        "Links one object per call -- for grouping many parts into a multi-level collection + parent hierarchy in one call, use organize_scene_hierarchy instead.",
     )
     async def manage_collection(
         action: CollectionAction = "CREATE",

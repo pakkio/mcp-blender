@@ -184,6 +184,7 @@ class InspectFocusShotTool(ToolBase):
         angle_elevation = float(params.get("angle_elevation", 20.0))
         angle_azimuth = float(params.get("angle_azimuth", 45.0))
         output_filepath = params.get("output_filepath")
+        include_base64 = bool(params.get("include_base64", False))
 
         if not target_name:
             return {"success": False, "message": "'target_object' is required"}
@@ -227,13 +228,21 @@ class InspectFocusShotTool(ToolBase):
             scene.render.filepath = final_out
             bpy.ops.render.opengl(write_still=True)
 
-            return {
+            b64_data = None
+            if include_base64 and os.path.isfile(final_out):
+                with open(final_out, "rb") as f:
+                    b64_data = base64.b64encode(f.read()).decode("utf-8")
+
+            result = {
                 "success": True,
                 "message": f"Captured focus shot for '{target_name}' at {focal_length}mm -> '{final_out}'",
                 "target_object": target_name,
                 "focal_length": focal_length,
                 "output_filepath": final_out,
             }
+            if b64_data:
+                result["image_base64"] = b64_data
+            return result
         finally:
             scene.camera = orig_cam
             scene.render.filepath = orig_filepath

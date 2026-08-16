@@ -4,6 +4,7 @@ from pydantic import BaseModel
 
 from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..errors import BridgeError, ErrorType
+from ..images import image_result
 
 RenderEngineType = Literal["BLENDER_EEVEE_NEXT", "CYCLES", "BLENDER_WORKBENCH", "BLENDER_EEVEE"]
 ColorTransformType = Literal["AgX", "Filmic", "Standard", "Raw"]
@@ -40,7 +41,9 @@ class SetRenderSettingsParams(BaseModel):
 def register_render_tools(mcp: FastMCP, bridge: BlenderBridge):
     @mcp.tool(
         name="render_scene",
-        description="Render the active scene to an image file or base64 string, with customizable engine, resolution, samples, and transparency.",
+        description="Render the active scene to an image file or base64 string, with customizable engine, resolution, samples, and transparency. "
+        "With return_image_base64=True the image is returned as real image content the model can see, not just a text field.",
+        structured_output=False,
     )
     async def render_scene(
         output_path: Optional[str] = None,
@@ -52,7 +55,7 @@ def register_render_tools(mcp: FastMCP, bridge: BlenderBridge):
         transparent_background: Optional[bool] = None,
         animation: bool = False,
         return_image_base64: bool = False,
-    ) -> dict:
+    ) -> list | dict:
         params = RenderSceneParams(
             output_path=output_path,
             engine=engine,
@@ -69,16 +72,17 @@ def register_render_tools(mcp: FastMCP, bridge: BlenderBridge):
         )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "render_scene failed"))
-        return result
+        return image_result(result)
 
     @mcp.tool(
         name="get_viewport_screenshot",
-        description="Quickly capture an OpenGL viewport screenshot to preview the scene and return it as image path and/or base64 data.",
+        description="Quickly capture an OpenGL viewport screenshot to preview the scene, returned as real image content the model can see (plus path/metadata).",
+        structured_output=False,
     )
     async def get_viewport_screenshot(
         output_path: Optional[str] = None,
         return_image_base64: bool = True,
-    ) -> dict:
+    ) -> list | dict:
         params = GetViewportScreenshotParams(
             output_path=output_path,
             return_image_base64=return_image_base64,
@@ -86,7 +90,7 @@ def register_render_tools(mcp: FastMCP, bridge: BlenderBridge):
         result = await bridge.send_request("get_viewport_screenshot", params.model_dump())
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "get_viewport_screenshot failed"))
-        return result
+        return image_result(result)
 
     @mcp.tool(
         name="set_render_settings",

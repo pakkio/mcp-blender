@@ -11,6 +11,7 @@ from .animation_ops import register_animation_tools
 from .animation_render_ops import register_animation_render_tools
 from .apply_transform import register_apply_transform_tool
 from .asset_browser_ops import register_asset_browser_tools
+from .asset_source_ops import register_asset_source_tools
 from .batch_execution_ops import register_batch_execution_tools
 from .boolean_ops import register_boolean_tools
 from .camera_ops import register_camera_tools
@@ -26,6 +27,7 @@ from .geometry_nodes_ops import register_geometry_nodes_tools
 from .get_object_info import register_get_object_info_tool
 from .get_scene_info import register_get_scene_info_tool
 from .grease_pencil_ops import register_grease_pencil_tools
+from .hierarchy_ops import register_hierarchy_tools
 from .io_ops import register_io_tools
 from .lattice_deform_ops import register_lattice_deform_tools
 from .light_ops import register_light_tools
@@ -55,6 +57,7 @@ from .text_typography_ops import register_text_typography_tools
 from .texture_image_ops import register_texture_image_tools
 from .uv_ops import register_uv_tools
 from .viewport_scene_advanced_ops import register_viewport_scene_advanced_tools
+from .vision_eval_ops import register_vision_eval_tools
 from .vision_feedback_ops import register_vision_feedback_tools
 from .volumetric_vdb_ops import register_volumetric_vdb_tools
 from .world_environment_ops import register_world_environment_tools
@@ -125,6 +128,10 @@ REGISTER_FUNCS = (
     register_advanced_material_slot_tools,
     register_animation_render_tools,
     register_scene_diagnostics_tools,
+    # --- Asset sourcing / grouping / vision additions ---
+    register_hierarchy_tools,
+    register_vision_eval_tools,
+    register_asset_source_tools,
 )
 
 

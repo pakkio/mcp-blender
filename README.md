@@ -24,9 +24,9 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 | Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v1.0.1) |
 | :--- | :--- | :--- |
-| **Total Tool Count** | ~5 to 15 basic tools | **117 Native Structured FastMCP Tools** |
+| **Total Tool Count** | ~5 to 15 basic tools | **121 Native Structured FastMCP Tools** |
 | **Architecture** | Legacy Blender 2.8/3.x zip addons | **Blender 4.2+ & 5.2+ Native Extension System** |
-| **Multimodal Vision Feedback** | ❌ None (blind execution) |  **`capture_multiview_audit`** (4-angle contact sheets with bounding metrics + inline Base64 data URIs) + **`inspect_focus_shot`** |
+| **Multimodal Vision Feedback** | ❌ None (blind execution) |  **`capture_multiview_audit`** (4-angle contact sheets returned as real MCP image content, not just base64 text) + **`inspect_focus_shot`** + **`evaluate_scene_visually`** (cheap-VLM fallback via OpenRouter for non-vision hosts) |
 | **Batch Latency Optimization** | ❌ Slow roundtrips (1 tool/turn) |  **`execute_batch`** (Executes 50+ actions in a single roundtrip with stop-on-error/optional-step control and per-step reporting) |
 | **Non-Modal Progress HUD** | ❌ None / Freezes UI |  **`update_progress_hud`** (Real-time GPU 2D floating glass card with progress % and live task logs) |
 | **Geometry Nodes Studio** | ❌ None |  **Procedural graphs, Point scattering, Curve profiling, VDB volume remeshing, Proximity effectors** |
@@ -50,7 +50,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 ---
 
-## 🛠️ Complete Tool Catalog (117 Tools across 18 Domains)
+## 🛠️ Complete Tool Catalog (121 Tools across 19 Domains)
 
 ### 1. Batch Execution & Non-Modal Progress HUD
 - **`execute_batch`**: Single-roundtrip multi-tool pipeline execution with stop-on-error/optional-step control and per-step output logging.
@@ -138,6 +138,12 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 ### 18. Game Engine Pipelines & System Management
 - **`export_unity_fbx`**, **`export_scene`**, **`generate_lods`**, **`import_file`**, **`manage_addons`**, **`inspect_addon`**, **`bake_advanced`**, **`configure_light_probe`**, **`purge_orphans_and_cleanup`**, **`manipulate_origin_cursor`**, **`align_distribute_objects`**, **`configure_preferences`**, **`get_system_info`**, **`configure_world_environment`**, **`configure_scene_physics`**, **`switch_workspace`**, **`get_scene_info`**, **`get_object_info`**, **`select_objects`**, **`delete_object`**, **`duplicate_object`**, **`parent_objects`**, **`unparent_objects`**, **`manage_collection`**, **`configure_camera`**, **`camera_look_at`**, **`frame_objects`**, **`configure_light`**, **`render_scene`**, **`get_viewport_screenshot`**, **`set_render_settings`**, **`execute_blender_python`**.
 
+### 19. Online Asset Sourcing, Semantic Grouping & Vision Fallback
+- **`search_online_assets`**: Search free/CC0 asset libraries -- Poly Haven and ambientCG need no API key; Sketchfab search is keyless too (download needs a token). Use before hand-modelling any recognisable real-world object.
+- **`import_online_asset`**: Download a found asset, import it via the existing pipeline, auto-decimate to a polygon budget, place it, and file it under a nested collection in one call.
+- **`organize_scene_hierarchy`**: Build a multi-level semantic grouping in one call -- nested collections plus an empty-parent hierarchy over a set of objects, with nested child groups.
+- **`evaluate_scene_visually`**: Cheap-VLM (OpenRouter) critique of a render, for hosts that cannot see the image content returned by `capture_multiview_audit`/`get_viewport_screenshot`/`render_scene` directly.
+
 ---
 
 ## 🚀 Quickstart Installation
@@ -158,7 +164,18 @@ cd mcp_server
 pip install -e .
 ```
 
-### 3. Add to your MCP Client Configuration
+### 3. (Optional) Configure API keys
+
+```bash
+cp .env.example .env
+```
+
+Fill in `SKETCHFAB_API_TOKEN` (free account, needed only to *download* Sketchfab models --
+search works without it) and/or `OPENROUTER_API_KEY` (powers `evaluate_scene_visually`, a
+cheap-VLM scene critique for hosts that can't see image content directly). Both are optional;
+tools that need a missing key degrade to an actionable message instead of failing.
+
+### 4. Add to your MCP Client Configuration
 
 For Claude Code, Claude Desktop, Antigravity, or Cursor:
 
@@ -178,7 +195,7 @@ For Claude Code, Claude Desktop, Antigravity, or Cursor:
 
 The project includes a two-tier test suite:
 
-### 1. FastMCP & Mock Bridge Unit Tests (117 Tests)
+### 1. FastMCP & Mock Bridge Unit Tests (151 Tests)
 Validates tool registration, schema definitions, Pydantic argument parsing, and WebSocket protocol handling:
 
 ```bash

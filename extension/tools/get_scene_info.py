@@ -14,6 +14,7 @@ class GetSceneInfoTool(ToolBase):
         include_materials = params.get("include_materials", True)
         include_lights = params.get("include_lights", True)
         include_cameras = params.get("include_cameras", True)
+        include_hierarchy = params.get("include_hierarchy", False)
 
         active_obj = bpy.context.active_object
         active_obj_name = active_obj.name if active_obj else None
@@ -48,17 +49,43 @@ class GetSceneInfoTool(ToolBase):
                     "scale": [round(v, 4) for v in obj.scale],
                     "hide_viewport": obj.hide_get(),
                     "hide_render": obj.hide_render,
+                    **(
+                        {
+                            "parent": obj.parent.name if obj.parent else None,
+                            "children": [c.name for c in obj.children],
+                            "collections": [c.name for c in obj.users_collection],
+                        }
+                        if include_hierarchy
+                        else {}
+                    ),
                 }
                 for obj in scene.objects
             ]
 
         if include_collections:
+            collection_parent = {}
+            for col in bpy.data.collections:
+                for child in col.children:
+                    collection_parent[child.name] = col.name
+            if include_hierarchy:
+                for child in scene.collection.children:
+                    collection_parent.setdefault(child.name, scene.collection.name)
+
             data["collections"] = [
                 {
                     "name": col.name,
                     "objects_count": len(col.objects),
                     "hide_viewport": col.hide_viewport,
                     "hide_render": col.hide_render,
+                    **(
+                        {
+                            "parent": collection_parent.get(col.name),
+                            "children": [c.name for c in col.children],
+                            "objects": [o.name for o in col.objects],
+                        }
+                        if include_hierarchy
+                        else {}
+                    ),
                 }
                 for col in bpy.data.collections
             ]

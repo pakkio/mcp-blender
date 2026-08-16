@@ -12,12 +12,14 @@ class GetSceneInfoParams(BaseModel):
     include_materials: bool = True
     include_lights: bool = True
     include_cameras: bool = True
+    include_hierarchy: bool = False
 
 
 def register_get_scene_info_tool(mcp: FastMCP, bridge: BlenderBridge):
     @mcp.tool(
         name="get_scene_info",
-        description="Get comprehensive information about the active Blender scene (objects, collections, materials, lights, cameras, timeline, render settings).",
+        description="Get comprehensive information about the active Blender scene (objects, collections, materials, lights, cameras, timeline, render settings). "
+        "Pass include_hierarchy=True to also get parent/child and collection-membership data -- call this before organize_scene_hierarchy or after a multi-part build to check nothing is left ungrouped.",
     )
     async def get_scene_info(
         include_objects: bool = True,
@@ -25,6 +27,7 @@ def register_get_scene_info_tool(mcp: FastMCP, bridge: BlenderBridge):
         include_materials: bool = True,
         include_lights: bool = True,
         include_cameras: bool = True,
+        include_hierarchy: bool = False,
     ) -> dict:
         params = GetSceneInfoParams(
             include_objects=include_objects,
@@ -32,6 +35,7 @@ def register_get_scene_info_tool(mcp: FastMCP, bridge: BlenderBridge):
             include_materials=include_materials,
             include_lights=include_lights,
             include_cameras=include_cameras,
+            include_hierarchy=include_hierarchy,
         )
         result = await bridge.send_request("get_scene_info", params.model_dump())
         if not result.get("success"):

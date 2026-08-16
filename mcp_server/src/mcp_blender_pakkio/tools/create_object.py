@@ -45,7 +45,9 @@ class CreateObjectParams(BaseModel):
 def register_create_object_tool(mcp: FastMCP, bridge: BlenderBridge):
     @mcp.tool(
         name="create_object",
-        description="Create mesh primitives (CUBE, UV_SPHERE, ICO_SPHERE, CYLINDER, CONE, PLANE, TORUS, GRID, MONKEY, CIRCLE), EMPTY, CAMERA, LIGHT, TEXT, or CURVE objects in the scene.",
+        description="Create mesh primitives (CUBE, UV_SPHERE, ICO_SPHERE, CYLINDER, CONE, PLANE, TORUS, GRID, MONKEY, CIRCLE), EMPTY, CAMERA, LIGHT, TEXT, or CURVE objects in the scene. "
+        "Use this for abstract shapes, placeholders, or props with no real-world counterpart. For any recognisable real-world object "
+        "(furniture, vehicles, plants, etc.), prefer search_online_assets + import_online_asset first.",
     )
     async def create_object(
         object_type: ObjectType = "CUBE",

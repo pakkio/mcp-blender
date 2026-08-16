@@ -29,6 +29,7 @@ async def test_happy_path():
             "include_materials": True,
             "include_lights": True,
             "include_cameras": True,
+            "include_hierarchy": False,
         },
     )
     assert result["scene_name"] == "Scene"

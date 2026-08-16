@@ -55,6 +55,7 @@ async def test_inspect_focus_shot_happy_path():
             "angle_elevation": 20.0,
             "angle_azimuth": 45.0,
             "output_filepath": None,
+            "include_base64": False,
         },
     )
     assert result["target_object"] == "Character"

@@ -49,6 +49,7 @@ from .geometry_nodes_ops import (
 from .get_object_info import GetObjectInfoTool
 from .get_scene_info import GetSceneInfoTool
 from .grease_pencil_ops import SetupLineArtContourTool
+from .hierarchy_ops import OrganizeSceneHierarchyTool
 from .io_ops import ExportSceneTool, ImportFileTool
 from .lattice_deform_ops import (
     CreateLatticeDeformTool,
@@ -273,6 +274,8 @@ ALL_TOOLS = (
     SetupSkySunRigTool(),
     BakeObjectAnimationTool(),
     RenderAnimationSequenceTool(),
+    # --- Asset sourcing / grouping / vision additions ---
+    OrganizeSceneHierarchyTool(),
 )
 
 TOOL_REGISTRY = {tool.name: tool for tool in ALL_TOOLS}

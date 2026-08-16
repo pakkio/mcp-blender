@@ -10,18 +10,30 @@ import sys
 from mcp.server.fastmcp import FastMCP
 
 from .bridge import BlenderBridge
-from .config import resolve_host_port
+from .config import load_dotenv, resolve_host_port
 from .tools import register_all_tools
 
 logger = logging.getLogger(__name__)
 
+SERVER_INSTRUCTIONS = """Bridges MCP clients to a running Blender instance via the mcp-blender-pakkio extension.
+
+Workflow contract:
+1. Call get_scene_info(include_hierarchy=True) before making changes, and again before reorganizing.
+2. For any recognisable real-world object (furniture, props, vehicles, plants), call search_online_assets
+   BEFORE modelling it from primitives. Only hand-model if search returns nothing usable, and say so.
+3. When importing a found asset, pass target_poly_budget (10k background props, 30k hero props, 100k ceiling).
+4. After any multi-part build, call organize_scene_hierarchy. Never leave loose objects at scene root.
+5. Verify visually with capture_multiview_audit(include_base64=True). If you cannot see the returned
+   image yourself, call evaluate_scene_visually instead of guessing."""
+
 
 def build_server() -> tuple[FastMCP, BlenderBridge]:
+    load_dotenv()
     host, port = resolve_host_port()
     bridge = BlenderBridge(host, port)
     mcp = FastMCP(
         name="mcp-blender-pakkio",
-        instructions="Bridges MCP clients to a running Blender instance via the mcp-blender-pakkio extension.",
+        instructions=SERVER_INSTRUCTIONS,
     )
     register_all_tools(mcp, bridge)
     return mcp, bridge

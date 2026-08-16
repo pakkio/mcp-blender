@@ -19,6 +19,35 @@ ENV_HOST = "MCP_BLENDER_HOST"
 ENV_PORT = "MCP_BLENDER_PORT"
 
 
+def _load_env_file(path: Path) -> None:
+    """Parse simple KEY=VALUE lines from a .env file into os.environ.
+
+    Real environment variables always win -- this only fills in gaps.
+    No python-dotenv dependency; this repo's config style is zero-dep.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+def load_dotenv(home: Path | None = None) -> None:
+    """Load .env from cwd, then ~/.mcp_blender_pakkio/.env (cwd wins on conflicts)."""
+    home = home or Path.home()
+    for candidate in (Path.cwd() / ".env", home / ".mcp_blender_pakkio" / ".env"):
+        if candidate.exists():
+            _load_env_file(candidate)
+
+
 def settings_path(home: Path | None = None) -> Path:
     """Must match extension/config.py's settings_path() exactly."""
     home = home or Path.home()
