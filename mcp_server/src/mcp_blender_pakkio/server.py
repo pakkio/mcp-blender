@@ -17,14 +17,22 @@ logger = logging.getLogger(__name__)
 
 SERVER_INSTRUCTIONS = """Bridges MCP clients to a running Blender instance via the mcp-blender-pakkio extension.
 
-Workflow contract:
-1. Call get_scene_info(include_hierarchy=True) before making changes, and again before reorganizing.
-2. For any recognisable real-world object (furniture, props, vehicles, plants), call search_online_assets
-   BEFORE modelling it from primitives. Only hand-model if search returns nothing usable, and say so.
-3. When importing a found asset, pass target_poly_budget (10k background props, 30k hero props, 100k ceiling).
-4. After any multi-part build, call organize_scene_hierarchy. Never leave loose objects at scene root.
-5. Verify visually with capture_multiview_audit(include_base64=True). If you cannot see the returned
-   image yourself, call evaluate_scene_visually instead of guessing."""
+Unified Domain Controllers:
+- blender_docs: Query multi-step 3D workflow recipes, parameters, and best practices.
+- blender_mesh: 3D modeling, transforms, boolean, decimate (<10k budget), remesh, UVs, modifiers.
+- blender_material: PBR shading, procedural grunge, toon shaders, transparency, material slots.
+- blender_assets: Online 3D asset search (Poly Haven/Sketchfab) & AI generation (Meshy/Tripo/Trellis).
+- blender_scene: Scene inspection, hierarchy organization, snapshot checkpoints & background jobs.
+- blender_rigging_anim: Armatures, bone posing, IK rigs, Blender 4.2+ hair curves, animation keyframes.
+- blender_camera_lighting: Studio & sun/sky lighting rigs, camera tracking/framing, viewport screenshots.
+- blender_physics_sim: Rigid body, cloth simulation, wind/vortex forces, fluid domain baking.
+- blender_render_pipeline: Image/animation rendering, PBR texture map baking, Unity FBX & LOD export.
+- execute_blender_python: Direct raw Python execution.
+
+Workflow Best Practices:
+1. Query `blender_docs` for multi-step recipes or parameter details when starting unfamiliar workflows.
+2. For real-world objects, search online or generate with AI (`blender_assets`) before hand-modeling.
+3. Save checkpoints (`blender_scene(action='checkpoint_create')`) before destructive operations."""
 
 
 def build_server() -> tuple[FastMCP, BlenderBridge]:

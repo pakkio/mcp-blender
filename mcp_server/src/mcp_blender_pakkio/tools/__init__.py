@@ -66,6 +66,9 @@ from .vision_feedback_ops import register_vision_feedback_tools
 from .volumetric_vdb_ops import register_volumetric_vdb_tools
 from .world_environment_ops import register_world_environment_tools
 
+from ..config import resolve_tool_mode
+from .domain_facades import register_domain_facades
+
 REGISTER_FUNCS = (
     register_get_scene_info_tool,
     register_get_object_info_tool,
@@ -145,5 +148,14 @@ REGISTER_FUNCS = (
 
 
 def register_all_tools(mcp: FastMCP, bridge: BlenderBridge) -> None:
+    mode = resolve_tool_mode()
+    if mode == "FULL":
+        for register_func in REGISTER_FUNCS:
+            register_func(mcp, bridge)
+    else:
+        register_domain_facades(mcp, bridge)
+
+
+def register_legacy_tools(mcp: FastMCP, bridge: BlenderBridge) -> None:
     for register_func in REGISTER_FUNCS:
         register_func(mcp, bridge)

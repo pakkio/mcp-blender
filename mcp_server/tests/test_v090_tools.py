@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 from mcp.server.fastmcp import FastMCP
 
 from mcp_blender_pakkio.bridge import BlenderBridge
-from mcp_blender_pakkio.tools import register_all_tools
+from mcp_blender_pakkio.tools import register_legacy_tools
 
 
 @pytest.fixture
@@ -16,7 +16,7 @@ def mock_bridge():
 @pytest.fixture
 def mcp_server(mock_bridge):
     mcp = FastMCP("test-blender")
-    register_all_tools(mcp, mock_bridge)
+    register_legacy_tools(mcp, mock_bridge)
     return mcp
 
 

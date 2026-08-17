@@ -17,6 +17,7 @@ DEFAULT_PORT = 9876
 
 ENV_HOST = "MCP_BLENDER_HOST"
 ENV_PORT = "MCP_BLENDER_PORT"
+ENV_TOOL_MODE = "MCP_BLENDER_TOOL_MODE"  # "AGGREGATED" (default, 10 domain controllers) or "FULL" (137 tools)
 
 
 def _load_env_file(path: Path) -> None:
@@ -72,3 +73,8 @@ def resolve_host_port(home: Path | None = None) -> tuple[str, int]:
             pass
 
     return env_host or DEFAULT_HOST, int(env_port) if env_port else DEFAULT_PORT
+
+
+def resolve_tool_mode() -> str:
+    """Return tool registration mode: 'AGGREGATED' (10 domain tools) or 'FULL' (137 tools)."""
+    return os.environ.get(ENV_TOOL_MODE, "AGGREGATED").upper()

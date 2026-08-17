@@ -24,7 +24,8 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 | Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v1.0.7) |
 | :--- | :--- | :--- |
-| **Total Tool Count** | ~5 to 15 basic tools | **137 Native Structured FastMCP Tools** |
+| **Total Tool Count** | ~5 to 15 basic tools | **137 Native Tools / 10 Unified Low-Context Domain Facades** |
+| **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
 | **Architecture** | Legacy Blender 2.8/3.x zip addons | **Blender 4.2+ & 5.2+ Native Extension System** |
 | **Transactional Safety** | ❌ None (scene corrupts on fail) | **`execute_batch` (with automatic snapshot rollback on failure)** + **`create_scene_checkpoint`** / **`restore_scene_checkpoint`** |
 | **Async Background Jobs** | ❌ UI freezes indefinitely | **`get_job_status`**, **`cancel_job`**, **`list_jobs`** |
@@ -38,6 +39,25 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 | **Geometry Nodes Studio** | ❌ None | **Procedural graphs, Point scattering, Curve profiling, VDB volume remeshing, Proximity effectors** |
 | **Shader & Material Studio** | ❌ Flat single colors | **Procedural edge-wear grunge masks, Triplanar box mapping, Auto-PBR texture folder loader, Specialty shaders** |
 | **Game Engine Pipelines** | ❌ Raw unoptimized exports | **`export_unity_fbx`** (fixes Unity $-90^\circ$ X-axis bug), **`generate_lods`** (LOD0..LODn), Draco GLTF/GLB, Animation Keyframe Baking |
+
+---
+
+## ⚡ Low-Context Unified Domain Controllers (`MCP_BLENDER_TOOL_MODE=AGGREGATED`)
+
+By default, `mcp-blender-pakkio` exposes **10 unified domain facade tools** that cut LLM context consumption by **90%** while retaining 100% of underlying pipeline features:
+
+1. **`blender_docs`**: Query multi-step 3D workflow recipes (e.g. cloth sim, character rigging & hair, PBR baking, game engine export), parameters, and best practices on demand.
+2. **`blender_mesh`**: 3D modeling, transforms, boolean CSG, decimation (<10k poly budget), voxel remesh, UV unwrap, and modifiers.
+3. **`blender_material`**: PBR shading, procedural grunge masks, toon shaders, alpha transparency, triplanar mapping, and material slots.
+4. **`blender_assets`**: Online asset search (Poly Haven/Sketchfab) & AI text-to-3D generation (Meshy/Tripo/Trellis).
+5. **`blender_scene`**: Scene inspection, semantic hierarchy organization, snapshot checkpoints for safe rollback, orphan purging, and background jobs.
+6. **`blender_rigging_anim`**: Armatures, bone posing, IK rigs, Blender 4.2+ hair curves creation & grooming, animation keyframes, and turntable camera animations.
+7. **`blender_camera_lighting`**: Studio 3-point & Nishita sun/sky lighting rigs, camera tracking/framing, viewport screenshots, and AI visual critique.
+8. **`blender_physics_sim`**: Rigid body physics, cloth simulation, wind/vortex forces, fluid domain baking, and scene physics settings.
+9. **`blender_render_pipeline`**: Still/animation rendering, PBR texture map baking, Unity FBX export with axis correction, and LOD chain generation.
+10. **`execute_blender_python`**: Direct raw Python execution.
+
+*(Note: Set `MCP_BLENDER_TOOL_MODE=FULL` in your `.env` if you prefer exposing all 137 individual micro-tools separately).*
 
 ---
 

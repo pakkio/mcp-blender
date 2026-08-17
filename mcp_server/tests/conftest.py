@@ -94,8 +94,15 @@ class FakeMCP:
     spinning up a real FastMCP server/session.
     """
 
+    def __init__(self):
+        self.tools = {}
+
     def tool(self, *args, **kwargs):
+        name = kwargs.get("name")
+
         def decorator(func):
+            tool_name = name or func.__name__
+            self.tools[tool_name] = func
             return func
 
         return decorator
