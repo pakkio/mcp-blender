@@ -15,6 +15,9 @@ dist/
 extension/dist/
 *.zip
 
+# Local scene exports / scratch previews
+exports/
+
 # Secrets
 .env
 .env.local

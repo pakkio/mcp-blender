@@ -47,10 +47,11 @@ async def run() -> None:
         logger.info("Connected to Blender bridge at %s", bridge.url)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "Could not connect to Blender bridge yet (%s) -- tool calls will fail until "
-            "the mcp_bridge_pakkio extension is running in Blender.",
+            "Could not connect to Blender bridge yet (%s) -- will keep retrying in the "
+            "background until the mcp_bridge_pakkio extension is running in Blender.",
             exc,
         )
+        asyncio.create_task(bridge.reconnect_with_backoff())
 
     loop = asyncio.get_running_loop()
     shutdown_event = asyncio.Event()

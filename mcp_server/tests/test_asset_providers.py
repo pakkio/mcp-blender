@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -9,6 +11,15 @@ from mcp_blender_pakkio.assets.providers.sketchfab import SketchfabProvider
 
 def _mock_transport(handler):
     return httpx.MockTransport(handler)
+
+
+async def _return_val(value):
+    return value
+
+
+@pytest.fixture(autouse=True)
+def _reset_waf_cache(monkeypatch):
+    monkeypatch.setattr("mcp_blender_pakkio.assets.providers.sketchfab._PAGE", None)
 
 
 @pytest.mark.asyncio
@@ -186,3 +197,67 @@ async def test_sketchfab_download_without_token_raises_actionable_error(monkeypa
     provider = SketchfabProvider()
     with pytest.raises(ProviderError, match="SKETCHFAB_API_TOKEN"):
         await provider.download("abc123", str(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_sketchfab_search_falls_back_to_browser_on_challenge(monkeypatch):
+    """CloudFront WAF challenge (202 + x-amzn-waf-action) must be transparently
+    re-issued inside the headless-Chrome fallback and succeed."""
+    browser_hits = {
+        "results": [{"uid": "abc123", "name": "Chair", "license": {"label": "CC-BY"}}]
+    }
+
+    async def fake_get(self, url, params=None, headers=None, **kwargs):
+        return httpx.Response(
+            202,
+            headers={"x-amzn-waf-action": "challenge"},
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    monkeypatch.setattr(
+        "mcp_blender_pakkio.assets.providers.sketchfab._browser_fetch_json",
+        lambda url, headers=None: _return_val((200, json.dumps(browser_hits))),
+    )
+
+    provider = SketchfabProvider()
+    hits = await provider.search("chair", "MODEL", 10)
+
+    assert hits[0].id == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_sketchfab_search_waf_fails_fast_when_no_browser(monkeypatch):
+    """When the WAF challenge is hit and no browser fallback is available,
+    search must raise an actionable AWS WAF message."""
+    async def fake_get(self, url, params=None, headers=None, **kwargs):
+        return httpx.Response(
+            202,
+            headers={"x-amzn-waf-action": "challenge"},
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    monkeypatch.setattr(
+        "mcp_blender_pakkio.assets.providers.sketchfab._browser_fetch_json",
+        lambda url, headers=None: _return_val(None),
+    )
+
+    provider = SketchfabProvider()
+    with pytest.raises(ProviderError, match="AWS WAF"):
+        await provider.search("chair", "MODEL", 10)
+
+
+@pytest.mark.asyncio
+async def test_sketchfab_search_non_waf_202_raises_http(monkeypatch):
+    """A 202 without the WAF challenge header is a genuine API error and must
+    surface as an HTTP failure rather than trigger the browser fallback."""
+
+    async def fake_get(self, url, params=None, headers=None, **kwargs):
+        return httpx.Response(202, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    provider = SketchfabProvider()
+    with pytest.raises(ProviderError, match="HTTP 202"):
+        await provider.search("chair", "MODEL", 10)

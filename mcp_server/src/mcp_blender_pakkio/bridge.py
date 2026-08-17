@@ -116,6 +116,23 @@ class BlenderBridge:
         if not self._closing:
             asyncio.create_task(self._reconnect_with_backoff())
 
+    async def reconnect_with_backoff(self) -> None:
+        """Retry connecting until successful, in the background.
+
+        Public entry point so a failed *initial* connect (e.g. the MCP server
+        started before Blender) retries too -- the private backoff loop was
+        previously only reachable after a connection was lost.
+        """
+        if self._state not in (ConnectionState.DISCONNECTED, ConnectionState.RECONNECTING):
+            return
+        self._state = ConnectionState.RECONNECTING
+        try:
+            await self._reconnect_with_backoff()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 -- never let the retry task die silently
+            self._state = ConnectionState.DISCONNECTED
+
     async def _reconnect_with_backoff(self) -> None:
         self._state = ConnectionState.RECONNECTING
         delay = MIN_RECONNECT_DELAY_S
