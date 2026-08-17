@@ -21,6 +21,7 @@ from ..errors import BridgeError, ErrorType
 
 AssetType = Literal["MODEL", "TEXTURE", "HDRI"]
 _MESH_EXTENSIONS = (".glb", ".gltf", ".fbx", ".obj", ".stl", ".usd", ".blend")
+_HDRI_EXTENSIONS = (".hdr", ".exr")
 
 
 class SearchOnlineAssetsParams(BaseModel):
@@ -40,15 +41,19 @@ class ImportOnlineAssetParams(BaseModel):
     scale_to_size: Optional[float] = None
 
 
-def _extract_mesh_file(archive_path: Path) -> Path:
+def _extract_archive(archive_path: Path) -> Path:
     extract_dir = archive_path.with_suffix("")
     extract_dir.mkdir(exist_ok=True)
     with zipfile.ZipFile(archive_path) as zf:
         zf.extractall(extract_dir)
+    return extract_dir
+
+
+def _find_mesh_file(extract_dir: Path) -> Optional[Path]:
     for candidate in sorted(extract_dir.rglob("*")):
         if candidate.is_file() and candidate.suffix.lower() in _MESH_EXTENSIONS:
             return candidate
-    raise ProviderError(f"No importable mesh file found inside '{archive_path.name}'")
+    return None
 
 
 def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
@@ -155,11 +160,51 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
             return {"success": False, "message": str(exc)}
 
         filepath = Path(downloaded.filepath)
-        if filepath.suffix.lower() == ".zip":
-            try:
-                filepath = _extract_mesh_file(filepath)
-            except ProviderError as exc:
-                return {"success": False, "message": str(exc)}
+
+        # Not every provider hit is a mesh: Poly Haven/ambientCG textures come
+        # back as either a loose folder of PBR maps or a zip of them, and Poly
+        # Haven HDRIs as a single .hdr/.exr -- none of those can go through
+        # the mesh import_file pipeline below, so route them to the matching
+        # Blender-side tool instead.
+        texture_folder: Optional[Path] = None
+        if filepath.is_dir():
+            texture_folder = filepath
+        elif filepath.suffix.lower() == ".zip":
+            extract_dir = _extract_archive(filepath)
+            mesh_file = _find_mesh_file(extract_dir)
+            if mesh_file is not None:
+                filepath = mesh_file
+            else:
+                texture_folder = extract_dir
+        elif filepath.suffix.lower() in _HDRI_EXTENSIONS:
+            hdri_result = await bridge.send_request("configure_world_environment", {"hdri_path": str(filepath)})
+            if not hdri_result.get("success"):
+                return {"success": False, "message": hdri_result.get("message", "configure_world_environment failed")}
+            return {
+                "success": True,
+                "message": f"Imported '{params.asset_id}' from {provider_obj.name} as world HDRI",
+                "hdri_path": hdri_result.get("hdri_path"),
+                "license": downloaded.license,
+                "attribution": downloaded.attribution,
+                "from_cache": downloaded.from_cache,
+            }
+
+        if texture_folder is not None:
+            material_name = f"M_{params.asset_id}"
+            mat_result = await bridge.send_request(
+                "auto_load_pbr_texture_set", {"folder_path": str(texture_folder), "material_name": material_name}
+            )
+            if not mat_result.get("success"):
+                return {"success": False, "message": mat_result.get("message", "auto_load_pbr_texture_set failed")}
+            return {
+                "success": True,
+                "message": f"Imported '{params.asset_id}' from {provider_obj.name} as PBR material '{material_name}'",
+                "material_name": material_name,
+                "loaded_maps": mat_result.get("loaded_maps", []),
+                "license": downloaded.license,
+                "attribution": downloaded.attribution,
+                "from_cache": downloaded.from_cache,
+            }
 
         import_result = await bridge.send_request(
             "import_file", {"filepath": str(filepath), "file_format": None}, timeout=HEAVY_REQUEST_TIMEOUT_S
@@ -231,8 +276,24 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
                 )
                 parent_col = seg
             leaf = segments[-1] if segments else None
-            link_targets = [wrapper_name] if wrapper_name else roots
+
+            # Move every imported object (not just roots/wrapper) into the target
+            # collection -- parenting under wrapper_name does not change an
+            # object's collection membership, so children left un-relinked here
+            # would stay wherever import_file's importer originally placed them.
+            link_targets = list(imported_objects)
+            if wrapper_name:
+                link_targets.append(wrapper_name)
             for obj_name in link_targets:
+                info = infos.get(obj_name)
+                if info is None:
+                    info = await bridge.send_request("get_object_info", {"name": obj_name})
+                for existing_col in info.get("collections", []):
+                    if existing_col != leaf:
+                        await bridge.send_request(
+                            "manage_collection",
+                            {"action": "UNLINK_OBJECT", "name": existing_col, "object_name": obj_name},
+                        )
                 await bridge.send_request(
                     "manage_collection", {"action": "LINK_OBJECT", "name": leaf, "object_name": obj_name}
                 )

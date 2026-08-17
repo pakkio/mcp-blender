@@ -1,4 +1,4 @@
-# mcp-blender-pakkio (v1.0.1)
+# mcp-blender-pakkio (v1.0.2)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender-pakkio` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v1.0.1) |
+| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v1.0.2) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **121 Native Structured FastMCP Tools** |
 | **Architecture** | Legacy Blender 2.8/3.x zip addons | **Blender 4.2+ & 5.2+ Native Extension System** |
@@ -151,11 +151,11 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-1.0.1.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-1.0.2.zip
 ```
 
 In Blender: **Edit > Preferences > Get Extensions > (top-right dropdown) > Install from Disk**,
-select `dist/mcp_bridge_pakkio-1.0.1.zip`, and enable **MCP Bridge Pakkio**.
+select `dist/mcp_bridge_pakkio-1.0.2.zip`, and enable **MCP Bridge Pakkio**.
 
 ### 2. Install the MCP Server
 

@@ -5,23 +5,26 @@ from .base import ToolBase
 
 
 def _get_or_create_collection_path(path: str) -> "bpy.types.Collection":
-    """Create (or reuse) each segment of a '/'-separated nested collection path."""
+    """Create (or reuse) each segment of a '/'-separated nested collection path.
+
+    Reuse is scoped to "already a child of this exact parent" -- a global
+    name lookup would find and silently relink an unrelated same-named
+    collection from elsewhere in the file (e.g. a repeated leaf segment like
+    "Details" under two different parents), corrupting whatever hierarchy it
+    was previously part of. If the name collides globally but isn't already
+    positioned here, bpy.data.collections.new() auto-suffixes it instead.
+    """
     parent = bpy.context.scene.collection
     col = parent
     for segment in path.split("/"):
         segment = segment.strip()
         if not segment:
             continue
-        col = bpy.data.collections.get(segment)
-        if col is None:
-            col = bpy.data.collections.new(segment)
-            parent.children.link(col)
-        elif col.name not in parent.children:
-            # Reused collection may currently be linked elsewhere; relink under parent.
-            for other in list(bpy.data.collections) + [bpy.context.scene.collection]:
-                if col.name in other.children:
-                    other.children.unlink(col)
-            parent.children.link(col)
+        existing = next((c for c in parent.children if c.name == segment), None)
+        if existing is None:
+            existing = bpy.data.collections.new(segment)
+            parent.children.link(existing)
+        col = existing
         parent = col
     return col
 

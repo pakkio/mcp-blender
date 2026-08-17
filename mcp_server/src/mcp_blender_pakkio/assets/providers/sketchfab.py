@@ -34,6 +34,10 @@ WAF_CHALLENGE_MSG = (
 
 # Cached Playwright page (kept alive across requests to amortise the ~5s launch).
 _PAGE = None
+# Guards the check-then-launch below so concurrent callers (e.g. a search
+# racing a follow-up import) await the one launch instead of each seeing
+# _PAGE as None and spawning their own extra, never-closed Chrome instance.
+_PAGE_LOCK = asyncio.Lock()
 
 
 async def _get_page():
@@ -41,20 +45,23 @@ async def _get_page():
     global _PAGE
     if _PAGE is not None:
         return _PAGE
-    from playwright.async_api import async_playwright
+    async with _PAGE_LOCK:
+        if _PAGE is not None:
+            return _PAGE
+        from playwright.async_api import async_playwright
 
-    pw = await async_playwright().start()
-    browser = await pw.chromium.launch(channel="chrome", headless=True)
-    context = await browser.new_context()
-    page = await context.new_page()
-    await page.goto("https://www.sketchfab.com/", wait_until="domcontentloaded", timeout=60000)
-    # Give the challenge a moment to clear (harmless if the token never appears).
-    for _ in range(30):
-        if any("aws-waf-token" in c.get("name", "") for c in await context.cookies()):
-            break
-        await asyncio.sleep(1)
-    _PAGE = page
-    return page
+        pw = await async_playwright().start()
+        browser = await pw.chromium.launch(channel="chrome", headless=True)
+        context = await browser.new_context()
+        page = await context.new_page()
+        await page.goto("https://www.sketchfab.com/", wait_until="domcontentloaded", timeout=60000)
+        # Give the challenge a moment to clear (harmless if the token never appears).
+        for _ in range(30):
+            if any("aws-waf-token" in c.get("name", "") for c in await context.cookies()):
+                break
+            await asyncio.sleep(1)
+        _PAGE = page
+        return page
 
 
 async def _browser_fetch_json(url: str, headers: dict | None = None) -> tuple[int, str] | None:
