@@ -12,6 +12,7 @@ class ExecuteBatchTool(ToolBase):
     def execute(self, params: dict) -> dict:
         commands = params.get("commands", [])
         stop_on_error = bool(params.get("stop_on_error", True))
+        rollback_on_failure = bool(params.get("rollback_on_failure", False))
         update_hud = bool(params.get("update_hud", True))
         batch_title = params.get("title", "Batch Execution")
 
@@ -19,10 +20,21 @@ class ExecuteBatchTool(ToolBase):
             return {"success": False, "message": "No commands provided in batch"}
 
         from ..bridge.dispatch import TOOL_REGISTRY
+        from .checkpoint_ops import _ensure_checkpoint_dir
 
         results = []
         total = len(commands)
         failed_index = None
+        auto_snapshot_path = None
+        rolled_back = False
+
+        if rollback_on_failure:
+            target_dir = _ensure_checkpoint_dir()
+            auto_snapshot_path = target_dir / f"_auto_batch_snap_{int(time.time() * 1000)}.blend"
+            try:
+                bpy.ops.wm.save_as_mainfile(filepath=str(auto_snapshot_path), copy=True)
+            except Exception:
+                auto_snapshot_path = None
 
         if update_hud:
             _ensure_draw_handler()
@@ -70,15 +82,27 @@ class ExecuteBatchTool(ToolBase):
 
             if not res.get("success", False) and not optional:
                 failed_index = idx
+                if rollback_on_failure and auto_snapshot_path and auto_snapshot_path.exists():
+                    try:
+                        bpy.ops.wm.open_mainfile(filepath=str(auto_snapshot_path))
+                        rolled_back = True
+                    except Exception as rollback_err:
+                        res["rollback_error"] = str(rollback_err)
                 if stop_on_error:
                     break
+
+        if auto_snapshot_path and auto_snapshot_path.exists():
+            try:
+                auto_snapshot_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
         duration = round(time.time() - start_time, 3)
         all_ok = failed_index is None
 
         if update_hud:
             HUD_STATE["progress"] = 100.0 if all_ok else pct
-            HUD_STATE["status"] = "Completed Successfully" if all_ok else f"Failed at step {failed_index + 1}"
+            HUD_STATE["status"] = "Completed Successfully" if all_ok else f"Failed at step {failed_index + 1}" + (" (Rolled Back)" if rolled_back else "")
             HUD_STATE["auto_hide_time"] = time.time() + 5.0
             for w in bpy.context.window_manager.windows:
                 for a in w.screen.areas:
@@ -87,10 +111,11 @@ class ExecuteBatchTool(ToolBase):
 
         return {
             "success": all_ok,
-            "message": f"Batch '{batch_title}' executed {len(results)}/{total} commands in {duration}s",
+            "message": f"Batch '{batch_title}' executed {len(results)}/{total} commands in {duration}s" + (" (Scene rolled back to pre-batch snapshot)" if rolled_back else ""),
             "total_commands": total,
             "total_executed": len(results),
             "failed_index": failed_index,
+            "rolled_back": rolled_back,
             "duration_seconds": duration,
             "results": results,
         }

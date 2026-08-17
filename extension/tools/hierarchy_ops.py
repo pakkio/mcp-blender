@@ -57,6 +57,8 @@ def _build_group(spec: dict, keep_transform: bool, rename_members: bool) -> dict
     if collection is not None:
         for obj in objects:
             _relink_to_collection(obj, collection)
+            for child in getattr(obj, "children_recursive", []):
+                _relink_to_collection(child, collection)
 
     root_empty = None
     if spec.get("root_empty", True) and objects:

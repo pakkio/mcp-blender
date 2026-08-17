@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
+from mcp_blender_pakkio.bridge import HEAVY_REQUEST_TIMEOUT_S
 from mcp_blender_pakkio.tools.remesh_decimate_ops import register_remesh_decimate_tools
 
 
@@ -29,6 +30,7 @@ async def test_decimate_mesh_happy_path():
             "symmetry_axis": "X",
             "apply_immediately": True,
         },
+        timeout=HEAVY_REQUEST_TIMEOUT_S,
     )
     assert result["result_vertices"] == 50
 

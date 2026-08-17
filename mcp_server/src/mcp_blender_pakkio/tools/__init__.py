@@ -15,6 +15,7 @@ from .asset_source_ops import register_asset_source_tools
 from .batch_execution_ops import register_batch_execution_tools
 from .boolean_ops import register_boolean_tools
 from .camera_ops import register_camera_tools
+from .checkpoint_ops import register_checkpoint_tools
 from .collection_ops import register_collection_tools
 from .compositor_effects_ops import register_compositor_effects_tools
 from .constraint_ops import register_constraint_tools
@@ -27,8 +28,10 @@ from .geometry_nodes_ops import register_geometry_nodes_tools
 from .get_object_info import register_get_object_info_tool
 from .get_scene_info import register_get_scene_info_tool
 from .grease_pencil_ops import register_grease_pencil_tools
+from .hair_curves_ops import register_hair_curves_tools
 from .hierarchy_ops import register_hierarchy_tools
 from .io_ops import register_io_tools
+from .job_ops import register_job_tools
 from .lattice_deform_ops import register_lattice_deform_tools
 from .light_ops import register_light_tools
 from .material_ops import register_material_tools
@@ -56,6 +59,7 @@ from .studio_lighting_ops import register_studio_lighting_tools
 from .text_typography_ops import register_text_typography_tools
 from .texture_image_ops import register_texture_image_tools
 from .uv_ops import register_uv_tools
+from .vfx_tracking_ops import register_vfx_tracking_tools
 from .viewport_scene_advanced_ops import register_viewport_scene_advanced_tools
 from .vision_eval_ops import register_vision_eval_tools
 from .vision_feedback_ops import register_vision_feedback_tools
@@ -132,6 +136,11 @@ REGISTER_FUNCS = (
     register_hierarchy_tools,
     register_vision_eval_tools,
     register_asset_source_tools,
+    # --- 1.0.7 / 1.1.0 Additions: Checkpoints, Jobs, Modern Hair Curves, Rigging IK & VFX Tracking ---
+    register_checkpoint_tools,
+    register_job_tools,
+    register_hair_curves_tools,
+    register_vfx_tracking_tools,
 )
 
 

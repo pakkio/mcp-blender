@@ -243,59 +243,54 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
                     )
             decimation_applied = {"ratio": round(ratio, 4), "tri_count_before": tri_count_before}
 
+        # Group every imported object under a root empty + collection so nothing
+        # is ever left loose at scene root -- regardless of whether the caller
+        # asked for placement. This mirrors the documented workflow ("after any
+        # multi-part build, call organize_scene_hierarchy") and keeps pack-style
+        # imports (FBX rigs with many parts) tidy without manual cleanup.
+        group_name = params.collection_path.rsplit("/", 1)[-1] if params.collection_path else params.asset_id
+        if not group_name:
+            group_name = "ImportedAsset"
+        collection_path = params.collection_path or f"Imports/{group_name}"
+
         wrapper_name = None
-        if (params.location is not None or params.scale_to_size is not None) and roots:
-            wrapper_result = await bridge.send_request(
-                "create_object",
-                {"object_type": "EMPTY", "name": f"{params.asset_id}_import", "location": params.location or (0.0, 0.0, 0.0)},
+        if roots:
+            organize_result = await bridge.send_request(
+                "organize_scene_hierarchy",
+                {
+                    "groups": [
+                        {
+                            "name": group_name,
+                            "objects": roots,
+                            "root_empty": True,
+                            "collection_path": collection_path,
+                            "children": [],
+                        }
+                    ],
+                    "keep_transform": True,
+                    "rename_members": False,
+                },
             )
-            if wrapper_result.get("success"):
-                wrapper_name = wrapper_result["name"]
-                await bridge.send_request(
-                    "parent_objects",
-                    {"parent_name": wrapper_name, "child_names": roots, "keep_transform": True, "parent_type": "OBJECT"},
+            if not organize_result.get("success"):
+                raise BridgeError(
+                    ErrorType.TOOL_EXECUTION, organize_result.get("message", "organize_scene_hierarchy failed")
                 )
+            wrapper_name = organize_result.get("groups", [{}])[0].get("root_empty")
 
-                if params.scale_to_size:
-                    max_dim = max(
-                        (max(infos[r].get("dimensions", [0, 0, 0])) for r in roots if r in infos),
-                        default=0.0,
+            if params.scale_to_size and wrapper_name:
+                max_dim = max(
+                    (max(infos[r].get("dimensions", [0, 0, 0])) for r in roots if r in infos),
+                    default=0.0,
+                )
+                if max_dim > 0:
+                    factor = params.scale_to_size / max_dim
+                    await bridge.send_request(
+                        "set_object_transform", {"name": wrapper_name, "scale": (factor, factor, factor)}
                     )
-                    if max_dim > 0:
-                        factor = params.scale_to_size / max_dim
-                        await bridge.send_request(
-                            "set_object_transform", {"name": wrapper_name, "scale": (factor, factor, factor)}
-                        )
 
-        if params.collection_path:
-            segments = [s for s in params.collection_path.split("/") if s]
-            parent_col = None
-            for seg in segments:
+            if params.location and wrapper_name:
                 await bridge.send_request(
-                    "manage_collection", {"action": "CREATE", "name": seg, "parent_collection": parent_col}
-                )
-                parent_col = seg
-            leaf = segments[-1] if segments else None
-
-            # Move every imported object (not just roots/wrapper) into the target
-            # collection -- parenting under wrapper_name does not change an
-            # object's collection membership, so children left un-relinked here
-            # would stay wherever import_file's importer originally placed them.
-            link_targets = list(imported_objects)
-            if wrapper_name:
-                link_targets.append(wrapper_name)
-            for obj_name in link_targets:
-                info = infos.get(obj_name)
-                if info is None:
-                    info = await bridge.send_request("get_object_info", {"name": obj_name})
-                for existing_col in info.get("collections", []):
-                    if existing_col != leaf:
-                        await bridge.send_request(
-                            "manage_collection",
-                            {"action": "UNLINK_OBJECT", "name": existing_col, "object_name": obj_name},
-                        )
-                await bridge.send_request(
-                    "manage_collection", {"action": "LINK_OBJECT", "name": leaf, "object_name": obj_name}
+                    "set_object_transform", {"name": wrapper_name, "location": list(params.location)}
                 )
 
         return {
@@ -304,7 +299,7 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
             "imported_objects": imported_objects,
             "roots": roots,
             "wrapper_object": wrapper_name,
-            "collection_path": params.collection_path,
+            "collection_path": collection_path,
             "tri_count_before": tri_count_before,
             "decimation_applied": decimation_applied,
             "license": downloaded.license,

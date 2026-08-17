@@ -72,55 +72,65 @@ def drain_queue() -> float:
     """
     global _idle_streak
     processed = False
-    while True:
-        try:
-            item = _queue.get_nowait()
-        except queue.Empty:
-            break
-        processed = True
-        _handle_item(item)
+    try:
+        while True:
+            try:
+                item = _queue.get_nowait()
+            except queue.Empty:
+                break
+            processed = True
+            try:
+                _handle_item(item)
+            except Exception as e:
+                pass
 
-    if processed:
-        _idle_streak = 0
+        if processed:
+            _idle_streak = 0
+            return _ACTIVE_INTERVAL_S
+
+        _idle_streak += 1
+        return min(_ACTIVE_INTERVAL_S * (1 + _idle_streak * 0.5), _MAX_IDLE_INTERVAL_S)
+    except Exception:
         return _ACTIVE_INTERVAL_S
-
-    _idle_streak += 1
-    return min(_ACTIVE_INTERVAL_S * (1 + _idle_streak * 0.5), _MAX_IDLE_INTERVAL_S)
 
 
 def _handle_item(item: QueuedRequest) -> None:
-    if item.future.cancelled():
+    if item.future.cancelled() or item.future.done():
         return
     if item.generation != _generation:
-        item.future.set_result(
-            protocol.error_envelope(
-                item.request_id,
-                protocol.INTERNAL_ERROR,
-                "Blender bridge was reloaded before this request could run",
+        if not item.future.done():
+            item.future.set_result(
+                protocol.error_envelope(
+                    item.request_id,
+                    protocol.INTERNAL_ERROR,
+                    "Blender bridge was reloaded before this request could run",
+                )
             )
-        )
         return
 
     tool = TOOL_REGISTRY.get(item.method)
     if tool is None:
-        item.future.set_result(
-            protocol.error_envelope(
-                item.request_id,
-                protocol.UNKNOWN_METHOD,
-                f"Unknown method '{item.method}'",
+        if not item.future.done():
+            item.future.set_result(
+                protocol.error_envelope(
+                    item.request_id,
+                    protocol.UNKNOWN_METHOD,
+                    f"Unknown method '{item.method}'",
+                )
             )
-        )
         return
 
     try:
         result = tool.execute(item.params)
-        item.future.set_result(protocol.success_envelope(item.request_id, result))
+        if not item.future.done():
+            item.future.set_result(protocol.success_envelope(item.request_id, result))
     except Exception as exc:  # noqa: BLE001 - must never crash the drain loop
-        item.future.set_result(
-            protocol.error_envelope(
-                item.request_id,
-                protocol.TOOL_EXECUTION_ERROR,
-                str(exc),
-                details=traceback.format_exc(),
+        if not item.future.done():
+            item.future.set_result(
+                protocol.error_envelope(
+                    item.request_id,
+                    protocol.TOOL_EXECUTION_ERROR,
+                    str(exc),
+                    details=traceback.format_exc(),
+                )
             )
-        )

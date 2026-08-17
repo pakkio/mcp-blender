@@ -13,7 +13,7 @@ async def test_setup_line_art_contour_happy_path():
         "gp_object": "LineArt_Ink",
         "source_type": "SCENE",
     }
-    setup_lineart = register_grease_pencil_tools(FakeMCP(), bridge)
+    setup_lineart, *_ = register_grease_pencil_tools(FakeMCP(), bridge)
 
     result = await setup_lineart(
         source_type="SCENE",

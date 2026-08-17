@@ -13,7 +13,7 @@ async def test_create_armature_happy_path():
         "armature_name": "HeroRig",
         "bones": ["Root", "Spine", "Head"],
     }
-    create_arm, pose_b = register_rigging_tools(FakeMCP(), bridge)
+    create_arm, pose_b, *_ = register_rigging_tools(FakeMCP(), bridge)
 
     result = await create_arm(
         name="HeroRig",
@@ -31,6 +31,7 @@ async def test_create_armature_happy_path():
                 {"name": "Root", "head": [0, 0, 0], "tail": [0, 0, 1]},
                 {"name": "Spine", "head": [0, 0, 1], "tail": [0, 0, 2], "parent": "Root"},
             ],
+            "bone_names": None,
             "bind_mesh": None,
             "bind_type": "AUTOMATIC_WEIGHTS",
         },
@@ -47,7 +48,7 @@ async def test_pose_bone_happy_path():
         "bone_name": "Spine",
         "frame": 10,
     }
-    create_arm, pose_b = register_rigging_tools(FakeMCP(), bridge)
+    create_arm, pose_b, *_ = register_rigging_tools(FakeMCP(), bridge)
 
     result = await pose_b(
         armature_name="HeroRig",

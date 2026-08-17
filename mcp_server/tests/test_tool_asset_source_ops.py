@@ -136,3 +136,59 @@ async def test_import_online_asset_unknown_provider_raises(monkeypatch):
 
     with pytest.raises(BridgeError):
         await import_fn(asset_id="x", provider="nonexistent")
+
+
+@pytest.mark.asyncio
+async def test_import_online_asset_always_organizes_hierarchy(monkeypatch, tmp_path):
+    downloaded = DownloadedAsset(
+        filepath=str(tmp_path / "character.glb"),
+        provider="polyhaven",
+        asset_id="knight",
+        license="CC0",
+        attribution="'knight' by Poly Haven",
+        from_cache=False,
+    )
+    (tmp_path / "character.glb").write_bytes(b"glb-bytes")
+    provider = _FakeProvider("polyhaven", download_result=downloaded)
+
+    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+
+    recorded_calls = []
+    bridge = AsyncMock()
+
+    async def send_request(method, params, timeout=None):
+        recorded_calls.append((method, params))
+        if method == "import_file":
+            return {"success": True, "imported_objects": ["Rig_Armature", "Mesh_Body"]}
+        if method == "get_object_info":
+            if params["name"] == "Rig_Armature":
+                return {"success": True, "type": "ARMATURE", "parent": None, "dimensions": [1.0, 1.0, 2.0]}
+            return {"success": True, "type": "MESH", "parent": "Rig_Armature", "dimensions": [1.0, 1.0, 2.0]}
+        if method == "organize_scene_hierarchy":
+            return {
+                "success": True,
+                "groups": [{"name": "knight", "root_empty": "knight_root", "objects": ["Rig_Armature"]}],
+            }
+        return {"success": True}
+
+    bridge.send_request.side_effect = send_request
+
+    _search_fn, import_fn = register_asset_source_tools(FakeMCP(), bridge)
+    result = await import_fn(
+        asset_id="knight",
+        provider="polyhaven",
+        location=[1.0, 2.0, 0.0],
+        scale_to_size=4.0,
+    )
+
+    assert result["success"] is True
+    assert result["wrapper_object"] == "knight_root"
+    assert result["collection_path"] == "Imports/knight"
+    assert result["roots"] == ["Rig_Armature"]
+
+    hierarchy_calls = [c for c in recorded_calls if c[0] == "organize_scene_hierarchy"]
+    assert len(hierarchy_calls) == 1
+    assert hierarchy_calls[0][1]["groups"][0]["objects"] == ["Rig_Armature"]
+    assert hierarchy_calls[0][1]["groups"][0]["collection_path"] == "Imports/knight"
+

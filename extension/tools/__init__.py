@@ -26,6 +26,11 @@ from .asset_browser_ops import (
 from .batch_execution_ops import ExecuteBatchTool
 from .boolean_ops import BooleanOperationTool
 from .camera_ops import CameraLookAtTool, ConfigureCameraTool, FrameObjectsTool
+from .checkpoint_ops import (
+    CreateSceneCheckpointTool,
+    ListSceneCheckpointsTool,
+    RestoreSceneCheckpointTool,
+)
 from .collection_ops import ManageCollectionTool
 from .compositor_effects_ops import (
     ConfigureCompositorEffectsTool,
@@ -48,9 +53,19 @@ from .geometry_nodes_ops import (
 )
 from .get_object_info import GetObjectInfoTool
 from .get_scene_info import GetSceneInfoTool
-from .grease_pencil_ops import SetupLineArtContourTool
+from .grease_pencil_ops import (
+    CreateGreasePencilLayerTool,
+    DrawGreasePencilStrokesTool,
+    SetupLineArtContourTool,
+)
+from .hair_curves_ops import (
+    ApplyHairGroomModifierTool,
+    ConvertLegacyHairToCurvesTool,
+    CreateHairCurvesTool,
+)
 from .hierarchy_ops import OrganizeSceneHierarchyTool
 from .io_ops import ExportSceneTool, ImportFileTool
+from .job_ops import CancelJobTool, GetJobStatusTool, ListJobsTool
 from .lattice_deform_ops import (
     CreateLatticeDeformTool,
     DeformLatticePointsTool,
@@ -93,7 +108,13 @@ from .render_ops import (
     RenderSceneTool,
     SetRenderSettingsTool,
 )
-from .rigging_ops import CreateArmatureTool, PoseBoneTool
+from .rigging_ops import (
+    CreateArmatureTool,
+    PoseBoneTool,
+    SetupHumanoidRigPresetTool,
+    SetupIKConstraintTool,
+    SetupSplineIKConstraintTool,
+)
 from .sculpt_ops import (
     ApplySculptFilterTool,
     ConfigureSculptModeTool,
@@ -128,6 +149,10 @@ from .text_typography_ops import (
 )
 from .texture_image_ops import ImportImageAsPlaneTool, ProjectImageTextureTool
 from .uv_ops import UVUnwrapTool
+from .vfx_tracking_ops import (
+    SetupCameraTrackingTool,
+    SetupVFXShadowCatcherTool,
+)
 from .viewport_scene_advanced_ops import (
     AlignDistributeObjectsTool,
     ConfigureViewportDisplayTool,
@@ -276,6 +301,23 @@ ALL_TOOLS = (
     RenderAnimationSequenceTool(),
     # --- Asset sourcing / grouping / vision additions ---
     OrganizeSceneHierarchyTool(),
+    # --- 1.0.7 / 1.1.0 Additions: Checkpoints, Jobs, Modern Hair Curves, IK Rigging, GP & VFX Tracking ---
+    CreateSceneCheckpointTool(),
+    RestoreSceneCheckpointTool(),
+    ListSceneCheckpointsTool(),
+    GetJobStatusTool(),
+    CancelJobTool(),
+    ListJobsTool(),
+    SetupIKConstraintTool(),
+    SetupHumanoidRigPresetTool(),
+    SetupSplineIKConstraintTool(),
+    CreateHairCurvesTool(),
+    ApplyHairGroomModifierTool(),
+    ConvertLegacyHairToCurvesTool(),
+    CreateGreasePencilLayerTool(),
+    DrawGreasePencilStrokesTool(),
+    SetupCameraTrackingTool(),
+    SetupVFXShadowCatcherTool(),
 )
 
 TOOL_REGISTRY = {tool.name: tool for tool in ALL_TOOLS}

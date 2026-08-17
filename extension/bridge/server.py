@@ -47,6 +47,8 @@ HEAVY_METHODS = frozenset({
     "render_scene",
     "render_animation_sequence",
     "execute_batch",
+    "decimate_mesh",
+    "remesh_mesh",
 })
 
 _loop: Optional[asyncio.AbstractEventLoop] = None
@@ -65,31 +67,39 @@ def current_address() -> Optional[tuple]:
 
 
 async def _handle_client(websocket) -> None:
-    async for raw_message in websocket:
+    tasks = set()
+
+    async def _process_request(raw_message: str) -> None:
         request_id = None
         try:
             message = json.loads(raw_message)
         except (json.JSONDecodeError, TypeError):
-            await websocket.send(
-                json.dumps(
-                    protocol.error_envelope(None, protocol.INVALID_JSON, "Malformed JSON request")
+            try:
+                await websocket.send(
+                    json.dumps(
+                        protocol.error_envelope(None, protocol.INVALID_JSON, "Malformed JSON request")
+                    )
                 )
-            )
-            continue
+            except Exception:
+                pass
+            return
 
         request_id = message.get("id")
         method = message.get("method")
         params = message.get("params") or {}
 
         if not method:
-            await websocket.send(
-                json.dumps(
-                    protocol.error_envelope(
-                        request_id, protocol.INVALID_JSON, "Request is missing 'method'"
+            try:
+                await websocket.send(
+                    json.dumps(
+                        protocol.error_envelope(
+                            request_id, protocol.INVALID_JSON, "Request is missing 'method'"
+                        )
                     )
                 )
-            )
-            continue
+            except Exception:
+                pass
+            return
 
         future = dispatch.enqueue(request_id, method, params)
         timeout = HEAVY_REQUEST_TIMEOUT_S if method in HEAVY_METHODS else REQUEST_TIMEOUT_S
@@ -103,7 +113,25 @@ async def _handle_client(websocket) -> None:
                 protocol.INTERNAL_ERROR,
                 "Blender did not respond in time (main thread busy or addon disabled)",
             )
-        await websocket.send(json.dumps(envelope))
+        except Exception as exc:
+            envelope = protocol.error_envelope(
+                request_id,
+                protocol.INTERNAL_ERROR,
+                f"Unexpected bridge error: {exc}",
+            )
+        try:
+            await websocket.send(json.dumps(envelope))
+        except Exception:
+            pass
+
+    try:
+        async for raw_message in websocket:
+            task = asyncio.create_task(_process_request(raw_message))
+            tasks.add(task)
+            task.add_done_callback(tasks.discard)
+    finally:
+        for t in list(tasks):
+            t.cancel()
 
 
 async def _serve(host: str, port: int, ready: threading.Event) -> None:

@@ -8,7 +8,7 @@ import os
 import httpx
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_VISION_MODEL = "google/gemini-2.0-flash-001"
+DEFAULT_VISION_MODEL = "google/gemini-2.5-flash"
 REQUEST_TIMEOUT_S = 60.0
 
 

@@ -2,7 +2,7 @@ from typing import Literal, Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
-from ..bridge import BlenderBridge
+from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..errors import BridgeError, ErrorType
 
 DecimateMode = Literal["COLLAPSE", "UNSUBDIV", "PLANAR"]
@@ -56,7 +56,7 @@ def register_remesh_decimate_tools(mcp: FastMCP, bridge: BlenderBridge):
             symmetry_axis=symmetry_axis,
             apply_immediately=apply_immediately,
         )
-        result = await bridge.send_request("decimate_mesh", params.model_dump())
+        result = await bridge.send_request("decimate_mesh", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S)
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "decimate_mesh failed"))
         return result

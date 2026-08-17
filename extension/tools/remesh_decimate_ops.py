@@ -43,6 +43,12 @@ class DecimateMeshTool(ToolBase):
 
         if apply_immediately:
             bpy.context.view_layer.objects.active = obj
+            # Blender refuses to apply a modifier to a mesh that carries shape
+            # keys (a common situation on imported rigged/character assets).
+            # Drop them on the decimated result -- morph targets are generally
+            # meaningless on a collapsed mesh anyway.
+            if obj.data.shape_keys:
+                obj.shape_key_clear()
             bpy.ops.object.modifier_apply(modifier=mod.name)
 
         new_verts = len(obj.data.vertices) if apply_immediately else None
@@ -113,6 +119,8 @@ class RemeshMeshTool(ToolBase):
                 mod.use_smooth_shade = smooth_shading
 
             if apply_immediately:
+                if obj.data.shape_keys:
+                    obj.shape_key_clear()
                 bpy.ops.object.modifier_apply(modifier=mod.name)
 
         new_verts = len(obj.data.vertices)

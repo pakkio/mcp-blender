@@ -1,4 +1,4 @@
-# mcp-blender-pakkio (v1.0.2)
+# mcp-blender-pakkio (v1.0.7)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,18 +22,22 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender-pakkio` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v1.0.2) |
+| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v1.0.7) |
 | :--- | :--- | :--- |
-| **Total Tool Count** | ~5 to 15 basic tools | **121 Native Structured FastMCP Tools** |
+| **Total Tool Count** | ~5 to 15 basic tools | **137 Native Structured FastMCP Tools** |
 | **Architecture** | Legacy Blender 2.8/3.x zip addons | **Blender 4.2+ & 5.2+ Native Extension System** |
-| **Multimodal Vision Feedback** | ❌ None (blind execution) |  **`capture_multiview_audit`** (4-angle contact sheets returned as real MCP image content, not just base64 text) + **`inspect_focus_shot`** + **`evaluate_scene_visually`** (cheap-VLM fallback via OpenRouter for non-vision hosts) |
-| **Batch Latency Optimization** | ❌ Slow roundtrips (1 tool/turn) |  **`execute_batch`** (Executes 50+ actions in a single roundtrip with stop-on-error/optional-step control and per-step reporting) |
-| **Non-Modal Progress HUD** | ❌ None / Freezes UI |  **`update_progress_hud`** (Real-time GPU 2D floating glass card with progress % and live task logs) |
-| **Geometry Nodes Studio** | ❌ None |  **Procedural graphs, Point scattering, Curve profiling, VDB volume remeshing, Proximity effectors** |
-| **Shader & Material Studio** | ❌ Flat single colors |  **Procedural edge-wear grunge masks, Triplanar box mapping, Auto-PBR texture folder loader, Specialty shaders (Car Paint, SSS Skin, Iridescence, Hologram, Dispersion)** |
-| **Physics & Dynamics** | ❌ None |  **Rigid body auto-settling drop simulations, Cloth presets (Silk, Leather, Denim), Force fields, Mantaflow smoke domains** |
-| **Game Engine Pipelines** | ❌ Raw unoptimized exports |  **`export_unity_fbx`** (fixes Unity $-90^\circ$ X-axis bug), **`generate_lods`** (LOD0..LODn), Draco GLTF/GLB, Animation Keyframe Baking |
-| **Type Safety & Reliability** | ❌ Fragile string code execution |  **Pydantic-validated parameters, strict schemas, error boundaries, self-correcting error handling** |
+| **Transactional Safety** | ❌ None (scene corrupts on fail) | **`execute_batch` (with automatic snapshot rollback on failure)** + **`create_scene_checkpoint`** / **`restore_scene_checkpoint`** |
+| **Async Background Jobs** | ❌ UI freezes indefinitely | **`get_job_status`**, **`cancel_job`**, **`list_jobs`** |
+| **Multimodal Vision Feedback** | ❌ None (blind execution) | **`capture_multiview_audit`** (4-angle contact sheets returned as real MCP image content) + **`inspect_focus_shot`** + **`evaluate_scene_visually`** (Gemini 2.5 Flash VLM fallback) |
+| **Online & AI 3D Sourcing** | ❌ None | **Poly Haven, Sketchfab, ambientCG, Meshy AI, Tripo3D, Trellis 3D** |
+| **IK Rigging & Metarigs** | ❌ Basic single bone only | **`setup_humanoid_rig_preset`** (biped metarig), **`setup_ik_constraint`** (pole targets/angles), **`setup_spline_ik_constraint`** |
+| **Blender 4.2+ Hair Curves** | ❌ Legacy particle only | **`create_hair_curves`**, **`apply_hair_groom_modifier`** (Frizz, Clump, Noise, Braid), **`convert_legacy_hair_to_curves`** |
+| **Grease Pencil & VFX Matchmoving** | ❌ None | **GPv3 layers & strokes**, **`setup_camera_tracking`**, **`setup_vfx_shadow_catcher`** |
+| **Batch Latency Optimization** | ❌ Slow roundtrips (1 tool/turn) | **`execute_batch`** (Executes 50+ actions in a single roundtrip with stop-on-error/optional-step control and per-step reporting) |
+| **Non-Modal Progress HUD** | ❌ None / Freezes UI | **`update_progress_hud`** (Real-time GPU 2D floating glass card with progress % and live task logs) |
+| **Geometry Nodes Studio** | ❌ None | **Procedural graphs, Point scattering, Curve profiling, VDB volume remeshing, Proximity effectors** |
+| **Shader & Material Studio** | ❌ Flat single colors | **Procedural edge-wear grunge masks, Triplanar box mapping, Auto-PBR texture folder loader, Specialty shaders** |
+| **Game Engine Pipelines** | ❌ Raw unoptimized exports | **`export_unity_fbx`** (fixes Unity $-90^\circ$ X-axis bug), **`generate_lods`** (LOD0..LODn), Draco GLTF/GLB, Animation Keyframe Baking |
 
 ---
 
@@ -151,11 +155,11 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-1.0.2.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-1.0.7.zip
 ```
 
 In Blender: **Edit > Preferences > Get Extensions > (top-right dropdown) > Install from Disk**,
-select `dist/mcp_bridge_pakkio-1.0.2.zip`, and enable **MCP Bridge Pakkio**.
+select `dist/mcp_bridge_pakkio-1.0.7.zip`, and enable **MCP Bridge Pakkio**.
 
 ### 2. Install the MCP Server
 

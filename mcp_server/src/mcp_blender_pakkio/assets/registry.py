@@ -1,12 +1,18 @@
 from .providers.ambientcg import AmbientCGProvider
 from .providers.base import AssetProvider
+from .providers.meshy import MeshyProvider
 from .providers.polyhaven import PolyHavenProvider
 from .providers.sketchfab import SketchfabProvider
+from .providers.trellis import TrellisProvider
+from .providers.tripo import TripoProvider
 
 _PROVIDERS: dict[str, AssetProvider] = {
     "polyhaven": PolyHavenProvider(),
     "ambientcg": AmbientCGProvider(),
     "sketchfab": SketchfabProvider(),
+    "meshy": MeshyProvider(),
+    "tripo": TripoProvider(),
+    "trellis": TrellisProvider(),
 }
 
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-blender-pakkio"
-version = "1.0.2"
+version = "1.0.7"
 description = "MCP stdio server that bridges MCP clients (e.g. Claude) to Blender via the mcp-blender-pakkio extension"
 license = "MIT"
 authors = [{ name = "Claudio Pacchiega", email = "claudio.pacchiega@gmail.com" }]

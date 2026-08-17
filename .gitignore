@@ -17,6 +17,8 @@ extension/dist/
 
 # Local scene exports / scratch previews
 exports/
+*.blend
+*.blend1
 
 # Secrets
 .env
