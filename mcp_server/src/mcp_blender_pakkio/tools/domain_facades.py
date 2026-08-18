@@ -237,7 +237,12 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
 
     @mcp.tool(
         name="blender_assets",
-        description="Search free/CC0 3D assets (Poly Haven, ambientCG, Sketchfab) or generate text-to-3D models with AI (Meshy AI, Tripo3D, Trellis) with auto-decimation & collection sorting.",
+        description=(
+            "Search free/CC0 3D assets (Poly Haven, ambientCG, Sketchfab) or generate text-to-3D models with AI "
+            "(Meshy AI, Tripo3D, Trellis) with auto-decimation & collection sorting. Import results carry an "
+            "'orientation' report; when it says the model landed on its side or upside down, retry with "
+            "params up_axis (the file's real up axis, usually 'Y') or auto_orient=true."
+        ),
     )
     async def blender_assets(
         action: Literal[
@@ -266,6 +271,9 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
                 collection_path=p.get("collection_path"),
                 location=p.get("location"),
                 scale_to_size=p.get("scale_to_size"),
+                forward_axis=p.get("forward_axis"),
+                up_axis=p.get("up_axis"),
+                auto_orient=p.get("auto_orient", False),
             )
         elif action == "meshy_generate":
             prompt = p.get("prompt", p.get("query", ""))
@@ -275,6 +283,9 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
                 target_poly_budget=p.get("target_poly_budget", 30000),
                 collection_path=p.get("collection_path", "Generated/Meshy"),
                 location=p.get("location"),
+                forward_axis=p.get("forward_axis"),
+                up_axis=p.get("up_axis"),
+                auto_orient=p.get("auto_orient", False),
             )
         elif action == "tripo_generate":
             prompt = p.get("prompt", p.get("query", ""))
@@ -284,6 +295,9 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
                 target_poly_budget=p.get("target_poly_budget", 25000),
                 collection_path=p.get("collection_path", "Generated/Tripo"),
                 location=p.get("location"),
+                forward_axis=p.get("forward_axis"),
+                up_axis=p.get("up_axis"),
+                auto_orient=p.get("auto_orient", False),
             )
         elif action == "asset_browser":
             return await _dispatch_bridge(bridge, "manage_asset_browser", p)

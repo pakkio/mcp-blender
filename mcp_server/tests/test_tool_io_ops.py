@@ -49,6 +49,24 @@ async def test_import_file_happy_path():
         {
             "filepath": "C:/tmp/scene.glb",
             "file_format": None,
+            "forward_axis": None,
+            "up_axis": None,
+            "check_orientation": True,
+            "auto_orient": False,
         },
     )
     assert result["imported_objects"] == ["ImportedMesh"]
+
+
+@pytest.mark.asyncio
+async def test_import_file_forwards_axis_and_auto_orient():
+    bridge = AsyncMock()
+    bridge.send_request.return_value = {"success": True, "imported_objects": ["Mesh"]}
+    _, import_fl = register_io_tools(FakeMCP(), bridge)
+
+    await import_fl(filepath="C:/tmp/part.stl", up_axis="Y", auto_orient=True)
+
+    payload = bridge.send_request.await_args.args[1]
+    assert payload["up_axis"] == "Y"
+    assert payload["forward_axis"] is None
+    assert payload["auto_orient"] is True

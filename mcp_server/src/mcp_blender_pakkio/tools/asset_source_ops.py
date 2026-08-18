@@ -18,6 +18,7 @@ from ..assets.providers.base import ProviderError
 from ..assets.registry import all_providers, get_provider
 from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..errors import BridgeError, ErrorType
+from .io_ops import Axis
 
 AssetType = Literal["MODEL", "TEXTURE", "HDRI"]
 _MESH_EXTENSIONS = (".glb", ".gltf", ".fbx", ".obj", ".stl", ".usd", ".blend")
@@ -39,6 +40,9 @@ class ImportOnlineAssetParams(BaseModel):
     collection_path: Optional[str] = None
     location: Optional[tuple[float, float, float]] = None
     scale_to_size: Optional[float] = None
+    forward_axis: Optional[Axis] = None
+    up_axis: Optional[Axis] = None
+    auto_orient: bool = False
 
 
 def _extract_archive(archive_path: Path) -> Path:
@@ -128,7 +132,9 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
             "Download a searched asset (by id + provider from search_online_assets) and import it into the scene via "
             "the existing import_file pipeline. Pass target_poly_budget to auto-decimate over budget (10k background "
             "props, 30k hero props, 100k ceiling), collection_path to file it under a nested collection immediately "
-            "(e.g. 'Furniture/Chairs'), and location/scale_to_size to place it."
+            "(e.g. 'Furniture/Chairs'), and location/scale_to_size to place it. The result carries an 'orientation' "
+            "report; downloaded assets are often authored Y-up or upside down, so pass up_axis (the file's real up "
+            "axis) or auto_orient=true when the report says the model landed on its side or inverted."
         ),
     )
     async def import_online_asset(
@@ -138,6 +144,9 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
         collection_path: Optional[str] = None,
         location: Optional[tuple[float, float, float]] = None,
         scale_to_size: Optional[float] = None,
+        forward_axis: Optional[Axis] = None,
+        up_axis: Optional[Axis] = None,
+        auto_orient: bool = False,
     ) -> dict:
         params = ImportOnlineAssetParams(
             asset_id=asset_id,
@@ -146,6 +155,9 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
             collection_path=collection_path,
             location=location,
             scale_to_size=scale_to_size,
+            forward_axis=forward_axis,
+            up_axis=up_axis,
+            auto_orient=auto_orient,
         )
 
         try:
@@ -207,7 +219,16 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
             }
 
         import_result = await bridge.send_request(
-            "import_file", {"filepath": str(filepath), "file_format": None}, timeout=HEAVY_REQUEST_TIMEOUT_S
+            "import_file",
+            {
+                "filepath": str(filepath),
+                "file_format": None,
+                "forward_axis": params.forward_axis,
+                "up_axis": params.up_axis,
+                "check_orientation": True,
+                "auto_orient": params.auto_orient,
+            },
+            timeout=HEAVY_REQUEST_TIMEOUT_S,
         )
         if not import_result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, import_result.get("message", "import_file failed"))
@@ -293,9 +314,18 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
                     "set_object_transform", {"name": wrapper_name, "location": list(params.location)}
                 )
 
+        orientation = import_result.get("orientation")
+        message = f"Imported '{params.asset_id}' from {provider_obj.name} ({len(imported_objects)} object(s))"
+        if isinstance(orientation, dict) and str(orientation.get("verdict", "")).startswith("suspect"):
+            message += (
+                f" — WARNING: {orientation['verdict'].replace('suspect_', '').replace('_', ' ')}; "
+                "re-import with auto_orient=true or an explicit up_axis"
+            )
+
         return {
             "success": True,
-            "message": f"Imported '{params.asset_id}' from {provider_obj.name} ({len(imported_objects)} object(s))",
+            "message": message,
+            "orientation": orientation,
             "imported_objects": imported_objects,
             "roots": roots,
             "wrapper_object": wrapper_name,

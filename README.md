@@ -1,4 +1,4 @@
-# mcp-blender-pakkio (v2.0.0)
+# mcp-blender-pakkio (v2.0.2)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender-pakkio` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.0) |
+| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.2) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **137 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -168,6 +168,13 @@ By default, `mcp-blender-pakkio` exposes **10 unified domain facade tools** that
 - **`organize_scene_hierarchy`**: Build a multi-level semantic grouping in one call -- nested collections plus an empty-parent hierarchy over a set of objects, with nested child groups.
 - **`evaluate_scene_visually`**: Cheap-VLM (OpenRouter) critique of a render, for hosts that cannot see the image content returned by `capture_multiview_audit`/`get_viewport_screenshot`/`render_scene` directly.
 
+### 20. Import Orientation (v2.0.2)
+Blender is Z-up; glTF, FBX, USD, Maya/Unity/3ds Max exports and most STL files are not, which is why an imported model's "up" often ends up horizontal.
+
+- **Axis conversion**: `import_file` (and `import_online_asset` / `blender_assets`) take `forward_axis` + `up_axis` describing the **source file's** convention. Passing only one fills in the conventional partner, so `up_axis="Y"` is usually the whole fix. FBX/OBJ/STL use the importer's own axis arguments; glTF/USD/BLEND have none, so the conversion is applied to the imported roots instead. STL is the common offender — the format carries no axis metadata, so Blender does no conversion at all.
+- **Orientation check**: every import returns an `orientation` report measured from the geometry (cross-section-weighted volume centroid, base-vs-top footprint, bounding dimensions) with a verdict of `ok`, `unknown`, `suspect_upside_down` or `suspect_lying_down` plus the corrective rotation. It only flags a model that has nothing to stand on, so upright-but-top-heavy shapes (tables, lamps) and deliberately flat ones (rugs, ground planes) are left alone.
+- **`auto_orient=true`**: applies that corrective rotation (180° or 90° about X, pivoted on the bounds) to the imported roots and re-runs the check.
+
 ---
 
 ## 🚀 Quickstart Installation
@@ -175,11 +182,11 @@ By default, `mcp-blender-pakkio` exposes **10 unified domain facade tools** that
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.0.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.2.zip
 ```
 
 In Blender: **Edit > Preferences > Get Extensions > (top-right dropdown) > Install from Disk**,
-select `dist/mcp_bridge_pakkio-2.0.0.zip`, and enable **MCP Bridge Pakkio**.
+select `dist/mcp_bridge_pakkio-2.0.2.zip`, and enable **MCP Bridge Pakkio**.
 
 ### 2. Install the MCP Server
 

@@ -1,6 +1,7 @@
 import os
 import bpy
 
+from . import axis_utils
 from .base import ToolBase
 
 
@@ -73,7 +74,10 @@ class ExportSceneTool(ToolBase):
 
 class ImportFileTool(ToolBase):
     name = "import_file"
-    description = "Import 3D model files (GLTF, GLB, FBX, OBJ, STL, USD, BLEND) into Blender."
+    description = (
+        "Import 3D model files (GLTF, GLB, FBX, OBJ, STL, USD, BLEND) into Blender, "
+        "with optional source axis conversion so Y-up files don't land on their side."
+    )
 
     def execute(self, params: dict) -> dict:
         filepath = params.get("filepath")
@@ -87,23 +91,35 @@ class ImportFileTool(ToolBase):
         else:
             file_format = file_format.upper()
 
+        forward_axis, up_axis, axis_error = axis_utils.resolve_axes(
+            params.get("forward_axis"), params.get("up_axis")
+        )
+        if axis_error:
+            return {"success": False, "message": axis_error}
+
+        # Nothing to do when the request is exactly the importer's own default.
+        if forward_axis and axis_utils.is_format_default(file_format, forward_axis, up_axis):
+            forward_axis = up_axis = None
+
+        # Axes handled by the operator itself, or by rotating what came out?
+        want_native = bool(forward_axis) and axis_utils.has_native_axis_args(file_format)
+        native_applied = False
+
         prev_objects = set(bpy.data.objects.keys())
 
         try:
             if file_format in ("GLTF", "GLB"):
                 bpy.ops.import_scene.gltf(filepath=filepath)
             elif file_format == "FBX":
-                bpy.ops.import_scene.fbx(filepath=filepath)
+                native_applied = self._call_import(
+                    bpy.ops.import_scene.fbx, filepath, forward_axis, up_axis, want_native
+                )
             elif file_format == "OBJ":
-                if hasattr(bpy.ops.wm, "obj_import"):
-                    bpy.ops.wm.obj_import(filepath=filepath)
-                else:
-                    bpy.ops.import_scene.obj(filepath=filepath)
+                op = bpy.ops.wm.obj_import if hasattr(bpy.ops.wm, "obj_import") else bpy.ops.import_scene.obj
+                native_applied = self._call_import(op, filepath, forward_axis, up_axis, want_native)
             elif file_format == "STL":
-                if hasattr(bpy.ops.wm, "stl_import"):
-                    bpy.ops.wm.stl_import(filepath=filepath)
-                else:
-                    bpy.ops.import_mesh.stl(filepath=filepath)
+                op = bpy.ops.wm.stl_import if hasattr(bpy.ops.wm, "stl_import") else bpy.ops.import_mesh.stl
+                native_applied = self._call_import(op, filepath, forward_axis, up_axis, want_native)
             elif file_format == "USD":
                 bpy.ops.wm.usd_import(filepath=filepath)
             elif file_format == "BLEND":
@@ -117,11 +133,78 @@ class ImportFileTool(ToolBase):
         except Exception as exc:
             return {"success": False, "message": f"Import failed: {exc}"}
 
-        new_objects = list(set(bpy.data.objects.keys()) - prev_objects)
+        new_names = list(set(bpy.data.objects.keys()) - prev_objects)
+
+        new_objects = [bpy.data.objects[name] for name in new_names]
+
+        axis_conversion = None
+        if forward_axis and not native_applied:
+            try:
+                roots = axis_utils.apply_conversion(new_objects, forward_axis, up_axis)
+            except Exception as exc:
+                return {"success": False, "message": f"Axis conversion failed: {exc}"}
+            axis_conversion = f"rotated {roots} root object(s) from {forward_axis} forward / {up_axis} up"
+        elif forward_axis:
+            axis_conversion = f"importer converted from {forward_axis} forward / {up_axis} up"
+
+        message = f"Imported {len(new_names)} object(s) from '{filepath}'"
+        if axis_conversion:
+            message += f" ({axis_conversion})"
+
+        # Always look at the result: axis metadata can be right and the model
+        # still be authored upside down.
+        check_requested = params.get("check_orientation", True)
+        auto_orient = bool(params.get("auto_orient", False))
+        orientation = None
+        if check_requested or auto_orient:
+            try:
+                orientation = axis_utils.analyze_orientation(new_objects)
+            except Exception as exc:
+                orientation = {"verdict": "unknown", "reason": f"orientation check failed: {exc}"}
+
+            verdict = orientation.get("verdict")
+            if auto_orient and verdict in ("suspect_upside_down", "suspect_lying_down"):
+                roots = axis_utils.apply_fix(
+                    new_objects, orientation["fix_axis"], orientation["fix_degrees"]
+                )
+                orientation["corrected"] = (
+                    f"rotated {roots} root object(s) {orientation['fix_degrees']}° "
+                    f"about {orientation['fix_axis']}"
+                )
+                orientation["verdict_after_fix"] = axis_utils.analyze_orientation(new_objects).get("verdict")
+                message += f" — {orientation['corrected']}"
+            elif verdict in ("suspect_upside_down", "suspect_lying_down"):
+                message += (
+                    f" — WARNING: {verdict.replace('suspect_', '').replace('_', ' ')} "
+                    f"({orientation.get('reason')}); re-import with auto_orient=true, or with "
+                    f"up_axis set to the file's real up axis"
+                )
 
         return {
             "success": True,
-            "message": f"Imported {len(new_objects)} object(s) from '{filepath}'",
-            "imported_objects": new_objects,
+            "message": message,
+            "imported_objects": new_names,
             "filepath": filepath,
+            "forward_axis": forward_axis,
+            "up_axis": up_axis,
+            "orientation": orientation,
         }
+
+    @staticmethod
+    def _call_import(operator, filepath, forward_axis, up_axis, want_native) -> bool:
+        """Run an import operator, passing axis kwargs when asked for.
+
+        Returns True when the operator itself did the conversion. Blender
+        renamed these properties between the legacy Python importers and the
+        current C++ ones, so if the kwargs are rejected we import plainly and
+        let the caller rotate the result instead of silently ignoring the axes.
+        """
+        if not want_native:
+            operator(filepath=filepath)
+            return False
+        try:
+            operator(filepath=filepath, **axis_utils.native_axis_kwargs(operator, forward_axis, up_axis))
+            return True
+        except TypeError:
+            operator(filepath=filepath)
+            return False
