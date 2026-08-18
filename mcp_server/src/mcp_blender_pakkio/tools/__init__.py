@@ -55,6 +55,7 @@ from .set_object_properties import register_set_object_properties_tool
 from .set_object_transform import register_set_object_transform_tool
 from .shader_studio_ops import register_shader_studio_tools
 from .shape_key_ops import register_shape_key_tools
+from .simplify_geometry_ops import register_simplify_geometry_tools
 from .studio_lighting_ops import register_studio_lighting_tools
 from .text_typography_ops import register_text_typography_tools
 from .texture_image_ops import register_texture_image_tools
@@ -144,6 +145,8 @@ REGISTER_FUNCS = (
     register_job_tools,
     register_hair_curves_tools,
     register_vfx_tracking_tools,
+    # --- 2.0.3 Additions: Budget-driven, form-preserving mesh simplification ---
+    register_simplify_geometry_tools,
 )
 
 

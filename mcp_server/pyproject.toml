@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-blender-pakkio"
-version = "2.0.2"
+version = "2.0.3"
 description = "MCP stdio server that bridges MCP clients (e.g. Claude) to Blender via the mcp-blender-pakkio extension"
 license = "MIT"
 authors = [{ name = "Claudio Pacchiega", email = "claudio.pacchiega@gmail.com" }]
@@ -32,3 +32,10 @@ packages = ["src/mcp_blender_pakkio"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    # mcp SDK's own FastMCP Settings.lifespan field has a self-referencing forward
+    # ref it can't resolve at class-definition time -- fires from inside the mcp
+    # package itself on FastMCP(), unrelated to anything in this codebase. Fixed
+    # upstream only in mcp>=2.0.0, a major bump outside our "mcp>=1.2.0,<2.0.0" pin.
+    "ignore:Field 'lifespan' has an incomplete definition:UserWarning",
+]

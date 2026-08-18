@@ -1,4 +1,4 @@
-# mcp-blender-pakkio (v2.0.2)
+# mcp-blender-pakkio (v2.0.3)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,9 +22,9 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender-pakkio` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.2) |
+| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.3) |
 | :--- | :--- | :--- |
-| **Total Tool Count** | ~5 to 15 basic tools | **137 Native Tools / 10 Unified Low-Context Domain Facades** |
+| **Total Tool Count** | ~5 to 15 basic tools | **138 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
 | **Architecture** | Legacy Blender 2.8/3.x zip addons | **Blender 4.2+ & 5.2+ Native Extension System** |
 | **Transactional Safety** | ❌ None (scene corrupts on fail) | **`execute_batch` (with automatic snapshot rollback on failure)** + **`create_scene_checkpoint`** / **`restore_scene_checkpoint`** |
@@ -57,7 +57,9 @@ By default, `mcp-blender-pakkio` exposes **10 unified domain facade tools** that
 9. **`blender_render_pipeline`**: Still/animation rendering, PBR texture map baking, Unity FBX export with axis correction, and LOD chain generation.
 10. **`execute_blender_python`**: Direct raw Python execution.
 
-*(Note: Set `MCP_BLENDER_TOOL_MODE=FULL` in your `.env` if you prefer exposing all 137 individual micro-tools separately).*
+Three tools stay standalone even in this low-context mode rather than folding into a facade, since they're already single-purpose entry points: `search_online_assets`, `import_online_asset` (both also reachable via `blender_assets`), and `evaluate_scene_visually` (also reachable via `blender_camera_lighting`) -- so aggregated mode exposes 13 tools total, not 10.
+
+*(Note: Set `MCP_BLENDER_TOOL_MODE=FULL` in your `.env` if you prefer exposing all 138 individual micro-tools separately).*
 
 ---
 
@@ -74,7 +76,7 @@ By default, `mcp-blender-pakkio` exposes **10 unified domain facade tools** that
 
 ---
 
-## 🛠️ Complete Tool Catalog (121 Tools across 19 Domains)
+## 🛠️ Complete Tool Catalog (138 Tools across 21 Domains)
 
 ### 1. Batch Execution & Non-Modal Progress HUD
 - **`execute_batch`**: Single-roundtrip multi-tool pipeline execution with stop-on-error/optional-step control and per-step output logging.
@@ -154,7 +156,7 @@ By default, `mcp-blender-pakkio` exposes **10 unified domain facade tools** that
 ### 16. Hard-Surface Modeling & Mesh Surgery
 - **`boolean_operation`**: UNION, DIFFERENCE, INTERSECT with dynamic solver resolution (`FLOAT`, `EXACT`, `MANIFOLD`).
 - **`advanced_mesh_edit`**: Bisect plane cuts with cap fill, bridge edge loops with lofting curves, extrude along normals, and edge creasing.
-- **`decimate_mesh`**, **`remesh_mesh`**, **`mesh_operation`**, **`create_object`**, **`add_modifier`**, **`set_modifier_properties`**, **`apply_modifier`**, **`remove_modifier`**, **`apply_transform`**.
+- **`decimate_mesh`**, **`remesh_mesh`**, **`simplify_geometry`**, **`mesh_operation`**, **`create_object`**, **`add_modifier`**, **`set_modifier_properties`**, **`apply_modifier`**, **`remove_modifier`**, **`apply_transform`**.
 
 ### 17. UV, Rigging & PBR Texturing
 - **`uv_unwrap`**, **`import_image_as_plane`**, **`project_image_texture`**, **`setup_pbr_materials`**, **`create_procedural_material`**, **`bake_textures`**, **`create_armature`**, **`pose_bone`**, **`manage_shape_keys`**, **`add_constraint`**.
@@ -164,7 +166,7 @@ By default, `mcp-blender-pakkio` exposes **10 unified domain facade tools** that
 
 ### 19. Online Asset Sourcing, Semantic Grouping & Vision Fallback
 - **`search_online_assets`**: Search free/CC0 asset libraries -- Poly Haven and ambientCG need no API key; Sketchfab search is keyless too (download needs a token). Use before hand-modelling any recognisable real-world object.
-- **`import_online_asset`**: Download a found asset, import it via the existing pipeline, auto-decimate to a polygon budget, place it, and file it under a nested collection in one call.
+- **`import_online_asset`**: Download a found asset, import it via the existing pipeline, auto-reduce to a polygon budget via `simplify_geometry` (falls back to a plain decimate if its quality gate rejects the result), place it, and file it under a nested collection in one call.
 - **`organize_scene_hierarchy`**: Build a multi-level semantic grouping in one call -- nested collections plus an empty-parent hierarchy over a set of objects, with nested child groups.
 - **`evaluate_scene_visually`**: Cheap-VLM (OpenRouter) critique of a render, for hosts that cannot see the image content returned by `capture_multiview_audit`/`get_viewport_screenshot`/`render_scene` directly.
 
@@ -175,6 +177,14 @@ Blender is Z-up; glTF, FBX, USD, Maya/Unity/3ds Max exports and most STL files a
 - **Orientation check**: every import returns an `orientation` report measured from the geometry (cross-section-weighted volume centroid, base-vs-top footprint, bounding dimensions) with a verdict of `ok`, `unknown`, `suspect_upside_down` or `suspect_lying_down` plus the corrective rotation. It only flags a model that has nothing to stand on, so upright-but-top-heavy shapes (tables, lamps) and deliberately flat ones (rugs, ground planes) are left alone.
 - **`auto_orient=true`**: applies that corrective rotation (180° or 90° about X, pivoted on the bounds) to the imported roots and re-runs the check.
 
+### 21. Mesh Simplification (v2.0.3)
+`decimate_mesh` assumes a welded, manifold mesh. Imported glTF/FBX/OBJ/STL geometry usually isn't one: exporters split vertices at every UV seam, sharp edge and material boundary, so what looks like one surface is disconnected shells that only happen to touch. Running Collapse decimate on that pulls the shells apart independently — the holes and wrecked topology a flat decimate produces on real assets. `remesh_mesh` avoids that by rebuilding the surface from scratch, but that destroys UVs and spends resolution uniformly rather than where the shape actually needs it.
+
+- **`simplify_geometry`**: reduces a mesh to a vertex budget (`target` + `target_unit`, or `preset`: `BACKGROUND`=10k / `HERO`=30k / `MAX`=100k) while preserving its form and UVs. Repairs first (welds coincident vertices, drops loose geometry, closes pinhole gaps — this is what actually fixes the "decimate makes holes" failure), then spends the budget on flat/dense regions first via limited dissolve, then curvature-weighted Collapse so thin features and boundaries survive.
+- **Measures what it produced**: every call reports two-sided surface deviation (`mathutils.bvhtree`, both directions — catches a deleted feature that a one-sided check would miss) and new-hole count, against a quality gate (`max_deviation_pct`, default 2%; `allow_new_holes`, default 0).
+- **Rolls back on failure**: a failed gate restores the mesh from an in-memory copy rather than handing back a broken result, and returns `suggested_retry_target`. Set `dry_run=true` to see the analysis and estimated ratio without changing anything.
+- Use `decimate_mesh` only on a mesh you already know is clean (hand-modelled, or already repaired); use `simplify_geometry` on anything imported or downloaded.
+
 ---
 
 ## 🚀 Quickstart Installation
@@ -182,11 +192,11 @@ Blender is Z-up; glTF, FBX, USD, Maya/Unity/3ds Max exports and most STL files a
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.2.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.3.zip
 ```
 
 In Blender: **Edit > Preferences > Get Extensions > (top-right dropdown) > Install from Disk**,
-select `dist/mcp_bridge_pakkio-2.0.2.zip`, and enable **MCP Bridge Pakkio**.
+select `dist/mcp_bridge_pakkio-2.0.3.zip`, and enable **MCP Bridge Pakkio**.
 
 ### 2. Install the MCP Server
 
@@ -226,7 +236,7 @@ For Claude Code, Claude Desktop, Antigravity, or Cursor:
 
 The project includes a two-tier test suite:
 
-### 1. FastMCP & Mock Bridge Unit Tests (151 Tests)
+### 1. FastMCP & Mock Bridge Unit Tests (207 Tests)
 Validates tool registration, schema definitions, Pydantic argument parsing, and WebSocket protocol handling:
 
 ```bash

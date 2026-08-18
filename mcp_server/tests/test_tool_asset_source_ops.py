@@ -71,7 +71,7 @@ async def test_search_online_assets_provider_error_is_isolated(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_import_online_asset_happy_path(monkeypatch, tmp_path):
+async def test_import_online_asset_happy_path_uses_simplify_geometry(monkeypatch, tmp_path):
     downloaded = DownloadedAsset(
         filepath=str(tmp_path / "chair.glb"), provider="polyhaven", asset_id="chair1",
         license="CC0", attribution="'chair1' by Poly Haven (CC0)", from_cache=False,
@@ -93,10 +93,11 @@ async def test_import_online_asset_happy_path(monkeypatch, tmp_path):
                 "type": "MESH",
                 "parent": None,
                 "dimensions": [1.0, 1.0, 1.0],
-                "mesh_data": {"polygons_count": 50000},
+                "mesh_data": {"polygons_count": 50000, "vertices_count": 26000},
             }
-        if method == "decimate_mesh":
-            return {"success": True}
+        if method == "simplify_geometry":
+            assert params["target_unit"] == "VERTICES"
+            return {"success": True, "result_vertices": params["target"]}
         return {"success": True}
 
     bridge.send_request.side_effect = send_request
@@ -108,8 +109,52 @@ async def test_import_online_asset_happy_path(monkeypatch, tmp_path):
     assert result["success"] is True
     assert result["imported_objects"] == ["Chair_Mesh"]
     assert result["decimation_applied"]["tri_count_before"] == 50000
-    assert result["decimation_applied"]["ratio"] == pytest.approx(0.2, rel=1e-3)
+    assert result["decimation_applied"]["objects"]["Chair_Mesh"]["method"] == "simplify_geometry"
     assert result["license"] == "CC0"
+
+
+@pytest.mark.asyncio
+async def test_import_online_asset_falls_back_to_decimate_when_simplify_gate_fails(monkeypatch, tmp_path):
+    downloaded = DownloadedAsset(
+        filepath=str(tmp_path / "fork.glb"), provider="polyhaven", asset_id="fork1",
+        license="CC0", attribution="'fork1' by Poly Haven (CC0)", from_cache=False,
+    )
+    (tmp_path / "fork.glb").write_bytes(b"glb-bytes")
+    provider = _FakeProvider("polyhaven", download_result=downloaded)
+
+    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+
+    bridge = AsyncMock()
+    seen_methods = []
+
+    async def send_request(method, params, timeout=None):
+        seen_methods.append(method)
+        if method == "import_file":
+            return {"success": True, "imported_objects": ["Fork_Mesh"]}
+        if method == "get_object_info":
+            return {
+                "success": True,
+                "type": "MESH",
+                "parent": None,
+                "dimensions": [1.0, 1.0, 1.0],
+                "mesh_data": {"polygons_count": 50000, "vertices_count": 26000},
+            }
+        if method == "simplify_geometry":
+            return {"success": False, "message": "quality gate failed"}
+        if method == "decimate_mesh":
+            return {"success": True}
+        return {"success": True}
+
+    bridge.send_request.side_effect = send_request
+
+    _search_fn, import_fn = register_asset_source_tools(FakeMCP(), bridge)
+
+    result = await import_fn(asset_id="fork1", provider="polyhaven", target_poly_budget=10000)
+
+    assert result["success"] is True
+    assert result["decimation_applied"]["objects"]["Fork_Mesh"]["method"] == "decimate_mesh"
+    assert "decimate_mesh" in seen_methods
 
 
 @pytest.mark.asyncio

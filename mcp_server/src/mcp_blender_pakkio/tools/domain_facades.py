@@ -1,6 +1,7 @@
 """Unified Domain Facades for Blender MCP.
-Consolidates ~137 micro-tools into 10 high-utility domain controllers, cutting schema context
-overhead by ~90% while maintaining full underlying capabilities.
+Consolidates ~138 micro-tools into 10 high-utility domain controllers (plus 3 tools kept
+standalone: search_online_assets, import_online_asset, evaluate_scene_visually), cutting
+schema context overhead by ~90% while maintaining full underlying capabilities.
 """
 
 from typing import Any, Literal, Optional
@@ -160,7 +161,11 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
     # 2. Mesh Modeling & Geometry
     @mcp.tool(
         name="blender_mesh",
-        description="Geometry manipulation: create primitives, delete, duplicate, transform, boolean CSG, decimate (<10k poly budget), remesh, UV unwrap, edit mesh, and modifiers.",
+        description=(
+            "Geometry manipulation: create primitives, delete, duplicate, transform, boolean CSG, decimate "
+            "(<10k poly budget), remesh, simplify to a vertex budget while preserving form, UV unwrap, edit "
+            "mesh, and modifiers."
+        ),
     )
     async def blender_mesh(
         action: Literal[
@@ -172,6 +177,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "boolean",
             "decimate",
             "remesh",
+            "simplify_geometry",
             "uv_unwrap",
             "mesh_op",
             "modifier",
@@ -189,13 +195,14 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "boolean": "boolean_operation",
             "decimate": "decimate_mesh",
             "remesh": "remesh_mesh",
+            "simplify_geometry": "simplify_geometry",
             "uv_unwrap": "uv_unwrap",
             "mesh_op": "mesh_operation",
             "modifier": "add_modifier",
             "origin_cursor": "manipulate_origin_cursor",
         }
         method = method_map.get(action, action)
-        timeout = HEAVY_REQUEST_TIMEOUT_S if action in ("boolean", "decimate", "remesh") else None
+        timeout = HEAVY_REQUEST_TIMEOUT_S if action in ("boolean", "decimate", "remesh", "simplify_geometry") else None
         return await _dispatch_bridge(bridge, method, p, timeout=timeout)
 
     # 3. Materials & Shaders

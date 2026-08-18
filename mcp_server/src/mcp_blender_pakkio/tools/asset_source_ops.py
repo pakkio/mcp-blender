@@ -130,9 +130,10 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
         name="import_online_asset",
         description=(
             "Download a searched asset (by id + provider from search_online_assets) and import it into the scene via "
-            "the existing import_file pipeline. Pass target_poly_budget to auto-decimate over budget (10k background "
-            "props, 30k hero props, 100k ceiling), collection_path to file it under a nested collection immediately "
-            "(e.g. 'Furniture/Chairs'), and location/scale_to_size to place it. The result carries an 'orientation' "
+            "the existing import_file pipeline. Pass target_poly_budget to auto-reduce over budget (10k background "
+            "props, 30k hero props, 100k ceiling) via simplify_geometry -- form-preserving, falls back to a plain "
+            "ratio decimate if its quality gate rejects the result. Pass collection_path to file it under a nested "
+            "collection immediately (e.g. 'Furniture/Chairs'), and location/scale_to_size to place it. The result carries an 'orientation' "
             "report; downloaded assets are often authored Y-up or upside down, so pass up_axis (the file's real up "
             "axis) or auto_orient=true when the report says the model landed on its side or inverted."
         ),
@@ -255,14 +256,40 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
 
         decimation_applied = None
         if params.target_poly_budget and tri_count_before > params.target_poly_budget > 0:
-            ratio = max(0.02, min(1.0, params.target_poly_budget / tri_count_before))
+            decimation_applied = {"tri_count_before": tri_count_before, "objects": {}}
             for name, info in infos.items():
-                if info.get("type") == "MESH":
+                if info.get("type") != "MESH":
+                    continue
+                mesh_verts = info.get("mesh_data", {}).get("vertices_count", 0)
+                mesh_tris = info.get("mesh_data", {}).get("polygons_count", 0)
+                # target_poly_budget is a triangle budget; simplify_geometry works
+                # in vertices, so scale it per-object by that object's own tri/vert ratio.
+                vert_target = (
+                    round(params.target_poly_budget * mesh_verts / mesh_tris) if mesh_tris > 0 else None
+                )
+                simplify_result = None
+                if vert_target:
+                    simplify_result = await bridge.send_request(
+                        "simplify_geometry",
+                        {"object_name": name, "target": vert_target, "target_unit": "VERTICES"},
+                        timeout=HEAVY_REQUEST_TIMEOUT_S,
+                    )
+                if simplify_result and simplify_result.get("success"):
+                    decimation_applied["objects"][name] = {
+                        "method": "simplify_geometry",
+                        "result_vertices": simplify_result.get("result_vertices"),
+                    }
+                else:
+                    # simplify_geometry either isn't available (no vert_target) or its
+                    # quality gate rejected the result -- fall back to the plain ratio
+                    # decimate so a budget request still does *something*, matching the
+                    # pre-simplify_geometry behaviour as a floor, not a regression.
+                    ratio = max(0.02, min(1.0, params.target_poly_budget / tri_count_before))
                     await bridge.send_request(
                         "decimate_mesh",
                         {"object_name": name, "mode": "COLLAPSE", "ratio": ratio, "apply_immediately": True},
                     )
-            decimation_applied = {"ratio": round(ratio, 4), "tri_count_before": tri_count_before}
+                    decimation_applied["objects"][name] = {"method": "decimate_mesh", "ratio": round(ratio, 4)}
 
         # Group every imported object under a root empty + collection so nothing
         # is ever left loose at scene root -- regardless of whether the caller

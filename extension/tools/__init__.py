@@ -138,6 +138,7 @@ from .shader_studio_ops import (
     SetupTriplanarMappingTool,
 )
 from .shape_key_ops import ManageShapeKeysTool
+from .simplify_geometry_ops import SimplifyGeometryTool
 from .studio_lighting_ops import (
     ConfigureLightLinkingTool,
     CreateLightingRigTool,
@@ -318,6 +319,8 @@ ALL_TOOLS = (
     DrawGreasePencilStrokesTool(),
     SetupCameraTrackingTool(),
     SetupVFXShadowCatcherTool(),
+    # --- 2.0.3 Additions: Budget-driven, form-preserving mesh simplification ---
+    SimplifyGeometryTool(),
 )
 
 TOOL_REGISTRY = {tool.name: tool for tool in ALL_TOOLS}
