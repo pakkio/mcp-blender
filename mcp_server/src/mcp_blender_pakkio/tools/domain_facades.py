@@ -1,7 +1,8 @@
 """Unified Domain Facades for Blender MCP.
-Consolidates ~138 micro-tools into 10 high-utility domain controllers (plus 3 tools kept
-standalone: search_online_assets, import_online_asset, evaluate_scene_visually), cutting
-schema context overhead by ~90% while maintaining full underlying capabilities.
+Consolidates ~138 micro-tools into 10 high-utility domain controllers (plus 4 tools kept
+standalone: search_online_assets, import_online_asset, evaluate_scene_visually,
+simplify_geometry), cutting schema context overhead by ~90% while maintaining full
+underlying capabilities.
 """
 
 from typing import Any, Literal, Optional
@@ -13,6 +14,7 @@ from ..docs.registry import search_docs
 from ..errors import BridgeError, ErrorType
 from .asset_source_ops import register_asset_source_tools
 from .execute_python import register_execute_blender_python_tool
+from .simplify_geometry_ops import register_simplify_geometry_tools
 from .vision_eval_ops import register_vision_eval_tools
 
 
@@ -204,6 +206,11 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
         method = method_map.get(action, action)
         timeout = HEAVY_REQUEST_TIMEOUT_S if action in ("boolean", "decimate", "remesh", "simplify_geometry") else None
         return await _dispatch_bridge(bridge, method, p, timeout=timeout)
+
+    # Kept standalone (also reachable via blender_mesh(action="simplify_geometry")):
+    # it's a common, high-stakes operation on its own -- worth a top-level tool with
+    # its own full parameter schema and description, not just a hidden import side effect.
+    register_simplify_geometry_tools(mcp, bridge)
 
     # 3. Materials & Shaders
     @mcp.tool(

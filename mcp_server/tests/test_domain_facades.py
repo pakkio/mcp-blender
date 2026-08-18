@@ -86,9 +86,11 @@ async def test_tool_mode_switching():
         mcp = FakeMCP()
         bridge = AsyncMock()
         register_all_tools(mcp, bridge)
-        # Should only have ~13 tools (10 domain facades + search/import subtools)
+        # Should only have ~14 tools (10 domain facades + standalone search/import/
+        # eval/simplify subtools) -- nowhere near FULL mode's ~138.
         assert len(mcp.tools) < 20
         assert "blender_mesh" in mcp.tools
+        assert "simplify_geometry" in mcp.tools
 
     # Test FULL mode
     with patch.dict("os.environ", {"MCP_BLENDER_TOOL_MODE": "FULL"}):

@@ -1,4 +1,4 @@
-# mcp-blender-pakkio (v2.0.4)
+# mcp-blender-pakkio (v2.0.5)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender-pakkio` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.4) |
+| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.5) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **138 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -57,7 +57,7 @@ By default, `mcp-blender-pakkio` exposes **10 unified domain facade tools** that
 9. **`blender_render_pipeline`**: Still/animation rendering, PBR texture map baking, Unity FBX export with axis correction, and LOD chain generation.
 10. **`execute_blender_python`**: Direct raw Python execution.
 
-Three tools stay standalone even in this low-context mode rather than folding into a facade, since they're already single-purpose entry points: `search_online_assets`, `import_online_asset` (both also reachable via `blender_assets`), and `evaluate_scene_visually` (also reachable via `blender_camera_lighting`) -- so aggregated mode exposes 13 tools total, not 10.
+Four tools stay standalone even in this low-context mode rather than folding into a facade, since they're already single-purpose, high-stakes entry points worth their own full parameter schema: `search_online_assets`, `import_online_asset` (both also reachable via `blender_assets`), `evaluate_scene_visually` (also reachable via `blender_camera_lighting`), and `simplify_geometry` (also reachable via `blender_mesh(action="simplify_geometry")`) -- so aggregated mode exposes 14 tools total, not 10.
 
 *(Note: Set `MCP_BLENDER_TOOL_MODE=FULL` in your `.env` if you prefer exposing all 138 individual micro-tools separately).*
 
@@ -193,11 +193,11 @@ Blender is Z-up; glTF, FBX, USD, Maya/Unity/3ds Max exports and most STL files a
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.4.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.5.zip
 ```
 
 In Blender: **Edit > Preferences > Get Extensions > (top-right dropdown) > Install from Disk**,
-select `dist/mcp_bridge_pakkio-2.0.4.zip`, and enable **MCP Bridge Pakkio**.
+select `dist/mcp_bridge_pakkio-2.0.5.zip`, and enable **MCP Bridge Pakkio**.
 
 ### 2. Install the MCP Server
 
