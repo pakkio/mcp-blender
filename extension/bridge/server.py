@@ -49,6 +49,7 @@ HEAVY_METHODS = frozenset({
     "execute_batch",
     "decimate_mesh",
     "remesh_mesh",
+    "simplify_geometry",
 })
 
 _loop: Optional[asyncio.AbstractEventLoop] = None

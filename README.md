@@ -1,4 +1,4 @@
-# mcp-blender-pakkio (v2.0.3)
+# mcp-blender-pakkio (v2.0.4)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender-pakkio` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.3) |
+| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.4) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **138 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -184,6 +184,7 @@ Blender is Z-up; glTF, FBX, USD, Maya/Unity/3ds Max exports and most STL files a
 - **Measures what it produced**: every call reports two-sided surface deviation (`mathutils.bvhtree`, both directions — catches a deleted feature that a one-sided check would miss) and new-hole count, against a quality gate (`max_deviation_pct`, default 2%; `allow_new_holes`, default 0).
 - **Rolls back on failure**: a failed gate restores the mesh from an in-memory copy rather than handing back a broken result, and returns `suggested_retry_target`. Set `dry_run=true` to see the analysis and estimated ratio without changing anything.
 - Use `decimate_mesh` only on a mesh you already know is clean (hand-modelled, or already repaired); use `simplify_geometry` on anything imported or downloaded.
+- **v2.0.4 fix**: `simplify_geometry` on a large mesh (weld + dissolve + iterative collapse solve + deviation sampling) can run past 15s, but the Blender-side bridge wasn't in its long-timeout allowlist -- it would report "Blender did not respond in time" after 15s while the tool kept running, silently dropping the eventual result. Fixed in `extension/bridge/server.py`'s `HEAVY_METHODS`, with a regression test (`test_heavy_timeout_consistency.py`) checking every mcp_server-side heavy call has a matching entry there.
 
 ---
 
@@ -192,11 +193,11 @@ Blender is Z-up; glTF, FBX, USD, Maya/Unity/3ds Max exports and most STL files a
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.3.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.4.zip
 ```
 
 In Blender: **Edit > Preferences > Get Extensions > (top-right dropdown) > Install from Disk**,
-select `dist/mcp_bridge_pakkio-2.0.3.zip`, and enable **MCP Bridge Pakkio**.
+select `dist/mcp_bridge_pakkio-2.0.4.zip`, and enable **MCP Bridge Pakkio**.
 
 ### 2. Install the MCP Server
 
