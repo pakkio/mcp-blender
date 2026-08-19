@@ -45,3 +45,28 @@ def write_settings(host: str, port: int) -> None:
     path = settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"host": host, "port": port}, indent=2))
+
+
+def load_env_vars() -> None:
+    """Load keys from .env files into os.environ if not already present."""
+    candidates = [
+        Path.home() / ".mcp_blender_pakkio" / ".env",
+        Path.home() / ".env",
+        Path.home() / "w" / "mcp-blender" / ".env",
+        Path.home() / "w" / "mcp-blender-pakkio" / ".env",
+        Path.cwd() / ".env",
+        Path(__file__).resolve().parent.parent / ".env",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            try:
+                for line in candidate.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k = k.strip()
+                        v = v.strip().strip('"\'')
+                        if k and k not in os.environ:
+                            os.environ[k] = v
+            except Exception:
+                pass

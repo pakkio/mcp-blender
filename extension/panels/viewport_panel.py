@@ -73,6 +73,12 @@ class MCP_OT_regen_names(bpy.types.Operator):
         default=True,
     )
 
+    use_llm: bpy.props.BoolProperty(
+        name="Use LLM Semantics",
+        description="Call LLM (Claude/GPT) using key from .env file to translate and organize hierarchy organically",
+        default=True,
+    )
+
     def invoke(self, context, event):
         # Default scope intelligently based on active viewport selection
         if context.selected_objects:
@@ -107,9 +113,14 @@ class MCP_OT_regen_names(bpy.types.Operator):
         layout.separator()
         box_opt = layout.box()
         box_opt.prop(self, "rename_meshes")
+        box_opt.prop(self, "use_llm")
 
     def execute(self, context):
-        params = {"lang": self.lang, "rename_meshes": self.rename_meshes}
+        params = {
+            "lang": self.lang,
+            "rename_meshes": self.rename_meshes,
+            "use_llm": self.use_llm,
+        }
 
         if self.scope == "SELECTED":
             selected = [obj.name for obj in context.selected_objects]

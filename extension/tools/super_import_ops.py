@@ -237,31 +237,9 @@ def _download_url(url: str, dest_path: Path) -> None:
 
 def _get_sketchfab_token() -> str | None:
     """Get Sketchfab token from env or .env file."""
-    token = os.environ.get("SKETCHFAB_API_TOKEN")
-    if token:
-        return token
-
-    candidates = [
-        Path.home() / ".mcp_blender_pakkio" / ".env",
-        Path.home() / ".env",
-        Path.home() / "w" / "mcp-blender" / ".env",
-        Path.home() / "w" / "mcp-blender-pakkio" / ".env",
-        Path.cwd() / ".env",
-        Path(__file__).resolve().parent.parent.parent / ".env",
-    ]
-    for candidate in candidates:
-        if candidate.is_file():
-            try:
-                for line in candidate.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if line.startswith("SKETCHFAB_API_TOKEN=") and not line.startswith("#"):
-                        token = line.split("=", 1)[1].strip().strip('"\'')
-                        if token:
-                            os.environ["SKETCHFAB_API_TOKEN"] = token
-                            return token
-            except Exception:
-                pass
-    return None
+    from ..config import load_env_vars
+    load_env_vars()
+    return os.environ.get("SKETCHFAB_API_TOKEN")
 
 
 def _download_sketchfab_asset(asset_id: str, dest_dir: Path) -> tuple[Path | None, str, str]:

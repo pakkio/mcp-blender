@@ -227,6 +227,93 @@ GENERIC_NAMES = {
     "suzanne", "monkey", "empty", "obj", "mesh", "object", "default",
     "node", "primitive", "submesh", "part", "element"
 }
+def _call_llm_rename(objects_info: list[dict], lang: str) -> dict[str, str]:
+    """Call OpenAI or Anthropic LLM to semantically translate and organize names."""
+    import os
+    import json
+    import urllib.request
+    import urllib.parse
+    from pathlib import Path
+    from ..config import load_env_vars
+
+    load_env_vars()
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    openai_key = os.environ.get("OPENAI_API_KEY")
+
+    if not anthropic_key and not openai_key:
+        return {}
+
+    system_prompt = (
+        "You are an expert 3D model semantic organizer and translator. "
+        "Your task is to analyze a list of 3D object names from an imported model and translate/rename them "
+        f"into a clean, logical semantic hierarchy in '{lang}'. "
+        "Remove all random exporter suffixes (like hashes, GUIDs, exporter tags). "
+        "Keep generic names (like cube, cylinder, empty, mesh) generic if they have no specific meaning, "
+        "but translate specific terms (like wheel, leg, table, door) to proper anatomical/mechanical names "
+        f"in the target language '{lang}' (e.g. Ruota, Gamba, Tavolo, Portella). "
+        "You MUST return ONLY a JSON object mapping the exact old names to the proposed new names: "
+        '{"old_name": "NewName", "another_old_name": "AnotherNewName"}'
+    )
+
+    user_content = f"Here is the list of objects in the hierarchy:\n{json.dumps(objects_info, indent=2)}"
+
+    headers = {"Content-Type": "application/json"}
+    
+    # Try Anthropic Claude first
+    if anthropic_key:
+        url = "https://api.anthropic.com/v1/messages"
+        headers.update({
+            "x-api-key": anthropic_key,
+            "anthropic-version": "2023-06-01"
+        })
+        payload = {
+            "model": "claude-3-5-sonnet-20241022",
+            "max_tokens": 4096,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_content}]
+        }
+    # Fallback to OpenAI GPT-4o
+    elif openai_key:
+        url = "https://api.openai.com/v1/chat/completions"
+        headers.update({
+            "Authorization": f"Bearer {openai_key}"
+        })
+        payload = {
+            "model": "gpt-4o",
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ]
+        }
+    else:
+        return {}
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            response_data = json.loads(resp.read().decode("utf-8"))
+
+        if anthropic_key:
+            content_text = response_data["content"][0]["text"]
+        else:
+            content_text = response_data["choices"][0]["message"]["content"]
+
+        # Parse JSON output from LLM
+        # Look for JSON block in case Claude wrapped it in markdown
+        match = re.search(r"\{.*\}", content_text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return json.loads(content_text)
+    except Exception as e:
+        print(f"[MCP Bridge] LLM renaming request failed: {e}")
+        return {}
+
 
 
 def _localize_name(name: str, vocab: dict) -> str:
@@ -386,58 +473,123 @@ class RegenElementNamesTool(ToolBase):
         element = params.get("element")
         target_objects = params.get("objects")
         rename_meshes = bool(params.get("rename_meshes", True))
+        use_llm = bool(params.get("use_llm", False))
 
-        # Case 1: Specific list of objects passed (or selected in viewport)
+        # Collect target objects
+        objects_to_rename = []
+        is_selection = False
+        is_single_obj = False
+        root_col = None
+
         if target_objects and isinstance(target_objects, list):
-            renamed_objs = []
+            is_selection = True
             for obj_id in target_objects:
-                obj = (
-                    obj_id
-                    if isinstance(obj_id, bpy.types.Object)
-                    else bpy.data.objects.get(str(obj_id))
-                )
+                obj = obj_id if isinstance(obj_id, bpy.types.Object) else bpy.data.objects.get(str(obj_id))
                 if obj:
-                    rep = _regen_object(obj, vocab, rename_mesh=rename_meshes)
-                    renamed_objs.append(rep)
-                    # If this object has children, rename them too
+                    if obj not in objects_to_rename:
+                        objects_to_rename.append(obj)
                     for child in obj.children_recursive:
-                        rep_c = _regen_object(child, vocab, rename_mesh=rename_meshes)
-                        renamed_objs.append(rep_c)
+                        if child not in objects_to_rename:
+                            objects_to_rename.append(child)
+        elif element:
+            obj = bpy.data.objects.get(element)
+            col = bpy.data.collections.get(element)
+            if obj is not None and col is None:
+                is_single_obj = True
+                objects_to_rename = [obj] + list(obj.children_recursive)
+            else:
+                root_col = col
+                if root_col is None and obj is not None and obj.type == "EMPTY":
+                    root_col = bpy.data.collections.get(obj.name)
+                if root_col is None:
+                    return {"success": False, "message": f"No collection or Object named '{element}' found"}
+        else:
+            root_col = bpy.context.scene.collection
 
+        # If LLM is requested, try to use it
+        llm_success = False
+        if use_llm:
+            if not objects_to_rename and root_col:
+                def collect_recursive(c):
+                    for o in c.objects:
+                        if o not in objects_to_rename:
+                            objects_to_rename.append(o)
+                    for child_col in c.children:
+                        collect_recursive(child_col)
+                collect_recursive(root_col)
+
+            objects_info = []
+            for obj in objects_to_rename:
+                objects_info.append({
+                    "name": obj.name,
+                    "type": obj.type,
+                    "parent": obj.parent.name if obj.parent else None
+                })
+
+            if objects_info:
+                mapping = _call_llm_rename(objects_info, lang)
+                if mapping:
+                    llm_success = True
+                    renamed_objs = []
+                    for obj in objects_to_rename:
+                        old_name = obj.name
+                        new_name = mapping.get(old_name)
+                        renamed = False
+                        if new_name and new_name != old_name:
+                            try:
+                                obj.name = new_name
+                                renamed = True
+                            except Exception:
+                                pass
+                        
+                        if rename_meshes and obj.data and hasattr(obj.data, "name"):
+                            if obj.data.name == old_name:
+                                try:
+                                    obj.data.name = obj.name
+                                except Exception:
+                                    pass
+
+                        renamed_objs.append({
+                            "old_name": old_name,
+                            "new_name": obj.name,
+                            "type": obj.type,
+                            "renamed": renamed,
+                            "parent": obj.parent.name if obj.parent else None,
+                        })
+
+                    if not is_selection and not is_single_obj and root_col:
+                        report = _regen_collection(root_col, vocab, rename_objects=False)
+                        return {
+                            "success": True,
+                            "message": f"Regenerated names using LLM for '{report['new_name']}' hierarchy (lang={lang})",
+                            "lang": lang,
+                            "objects": renamed_objs,
+                            "root": report,
+                        }
+                    else:
+                        msg = "selected object(s)" if is_selection else f"object hierarchy '{objects_to_rename[0].name}'"
+                        total_renamed = sum(1 for r in renamed_objs if r["renamed"])
+                        return {
+                            "success": True,
+                            "message": f"Regenerated names using LLM for {msg} ({total_renamed} changed, lang={lang})",
+                            "lang": lang,
+                            "objects": renamed_objs,
+                        }
+
+        # Fallback to local dictionary translation
+        if is_selection or is_single_obj:
+            renamed_objs = []
+            for obj in objects_to_rename:
+                rep = _regen_object(obj, vocab, rename_mesh=rename_meshes)
+                renamed_objs.append(rep)
             total_renamed = sum(1 for r in renamed_objs if r["renamed"])
+            msg = "selected object(s)" if is_selection else f"object hierarchy '{objects_to_rename[0].name}'"
             return {
                 "success": True,
-                "message": f"Regenerated names for {len(renamed_objs)} selected object(s) ({total_renamed} changed, lang={lang})",
+                "message": f"Regenerated names for {msg} ({total_renamed} changed, lang={lang})",
                 "lang": lang,
                 "objects": renamed_objs,
             }
-
-        # Case 2: Specific element string passed (object or collection)
-        if element:
-            # Check if element is an Object (Mesh or Empty)
-            obj = bpy.data.objects.get(element)
-            col = bpy.data.collections.get(element)
-
-            if obj is not None and col is None:
-                renamed_objs = [_regen_object(obj, vocab, rename_mesh=rename_meshes)]
-                for child in obj.children_recursive:
-                    renamed_objs.append(_regen_object(child, vocab, rename_mesh=rename_meshes))
-                total_renamed = sum(1 for r in renamed_objs if r["renamed"])
-                return {
-                    "success": True,
-                    "message": f"Regenerated names for object hierarchy '{obj.name}' ({total_renamed} renamed, lang={lang})",
-                    "lang": lang,
-                    "objects": renamed_objs,
-                }
-
-            root_col = col
-            if root_col is None and obj is not None and obj.type == "EMPTY":
-                root_col = bpy.data.collections.get(obj.name)
-
-            if root_col is None:
-                return {"success": False, "message": f"No collection or Object named '{element}' found"}
-        else:
-            root_col = bpy.context.scene.collection
 
         report = _regen_collection(root_col, vocab, rename_objects=True)
         return {
