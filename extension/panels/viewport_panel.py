@@ -23,12 +23,18 @@ class MCP_OT_create_checkpoint(bpy.types.Operator):
     )
 
     def execute(self, context):
-        result = TOOL_REGISTRY["create_scene_checkpoint"].execute({"name": self.name or None})
-        if not result.get("success"):
-            self.report({"ERROR"}, result.get("message", "Checkpoint failed"))
-            return {"CANCELLED"}
-        self.report({"INFO"}, result["message"])
-        return {"FINISHED"}
+        if context.window:
+            context.window.cursor_modal_set("WAIT")
+        try:
+            result = TOOL_REGISTRY["create_scene_checkpoint"].execute({"name": self.name or None})
+            if not result.get("success"):
+                self.report({"ERROR"}, result.get("message", "Checkpoint failed"))
+                return {"CANCELLED"}
+            self.report({"INFO"}, result["message"])
+            return {"FINISHED"}
+        finally:
+            if context.window:
+                context.window.cursor_modal_restore()
 
 
 class MCP_OT_regen_names(bpy.types.Operator):
@@ -123,13 +129,19 @@ class MCP_OT_regen_names(bpy.types.Operator):
         else:
             params["element"] = None
 
-        result = TOOL_REGISTRY["regen_element_names"].execute(params)
-        if not result.get("success"):
-            self.report({"ERROR"}, result.get("message", "Regen failed"))
-            return {"CANCELLED"}
+        if context.window:
+            context.window.cursor_modal_set("WAIT")
+        try:
+            result = TOOL_REGISTRY["regen_element_names"].execute(params)
+            if not result.get("success"):
+                self.report({"ERROR"}, result.get("message", "Regen failed"))
+                return {"CANCELLED"}
 
-        self.report({"INFO"}, result["message"])
-        return {"FINISHED"}
+            self.report({"INFO"}, result["message"])
+            return {"FINISHED"}
+        finally:
+            if context.window:
+                context.window.cursor_modal_restore()
 
 
 # Skipped by default by the invoke-smoke-test in MCP_OT_verify_tools:
@@ -189,6 +201,8 @@ class MCP_OT_verify_tools(bpy.types.Operator):
         validated = 0
         ran_clean = 0
         skipped = 0
+        if context.window:
+            context.window.cursor_modal_set("WAIT")
         try:
             for name, tool in TOOL_REGISTRY.items():
                 if not self.include_heavy and any(k in name for k in _VERIFY_SKIP_KEYWORDS):
@@ -207,6 +221,8 @@ class MCP_OT_verify_tools(bpy.types.Operator):
             bpy.data.scenes.remove(tmp_scene)
             for _ in range(3):
                 bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
+            if context.window:
+                context.window.cursor_modal_restore()
 
         total = len(TOOL_REGISTRY)
         summary = (
@@ -234,49 +250,140 @@ from ..tools import TOOL_REGISTRY
 from .preferences import status_text_and_icon
 
 _preview_collections: dict = {}
+_search_results_cache: list = []
 
 
 def _get_search_items_callback(self, context):
-    if "main" not in _preview_collections:
-        try:
-            _preview_collections["main"] = bpy.utils.previews.new()
-        except Exception:
-            pass
+    if not _search_results_cache:
+        return [("NONE", "Click 'Search Online' to find models", "Enter query and click search", "INFO", 0)]
+    return _search_results_cache
+def run_online_search(self, context):
+    global _search_results_cache
+    from ..bridge import dispatch
 
-    pcoll = _preview_collections.get("main")
-    query = getattr(self, "search_query", "").strip()
-    provider = getattr(self, "search_provider", "ALL")
+    query = self.search_query.strip()
+    if not query:
+        return
 
-    from ..tools.super_import_ops import download_thumbnail, search_all_online_models
+    dispatch.set_client_status(f"Searching online for '{query}' (page {self.search_page})...")
 
-    hits = search_all_online_models(query, provider=provider, limit=15)
-    if not hits:
-        return [("NONE", f"No models found for '{query}'", "Try searching for another keyword or change provider", "ERROR", 0)]
+    try:
+        bpy.ops.wm.redraw_timer(type='DRAW', iterations=1)
+    except Exception:
+        pass
 
-    items = []
-    for i, hit in enumerate(hits):
-        raw_id = hit["id"]
-        prov = hit.get("provider", "online").lower()
-        full_key = f"{prov}:{raw_id}"
-        icon_id = 0
-        if pcoll is not None and hit.get("thumbnail_url"):
-            if raw_id not in pcoll:
-                thumb_path = download_thumbnail(raw_id, hit["thumbnail_url"])
-                if thumb_path:
-                    try:
-                        pcoll.load(raw_id, thumb_path, "IMAGE")
-                    except Exception:
-                        pass
-            if raw_id in pcoll:
-                icon_id = pcoll[raw_id].icon_id
+    if context.window:
+        context.window.cursor_modal_set("WAIT")
+    try:
+        if "main" not in _preview_collections:
+            try:
+                _preview_collections["main"] = bpy.utils.previews.new()
+            except Exception:
+                pass
 
-        prov_tag = prov.upper()
-        poly_str = f"{hit['polycount']:,} verts" if hit.get("polycount") else "PBR asset"
-        label = f"[{prov_tag}] {hit['name']} ({poly_str})"
-        desc = f"{hit['credits']} | {hit['downloads']:,} downloads"
-        items.append((full_key, label, desc, icon_id or "OBJECT_DATA", i))
+        pcoll = _preview_collections.get("main")
+        provider = self.search_provider
 
-    return items
+        from ..tools.super_import_ops import download_thumbnail, search_all_online_models
+
+        limit = 15
+        offset = (self.search_page - 1) * limit
+        hits = search_all_online_models(query, provider=provider, limit=limit, offset=offset)
+        if not hits:
+            _search_results_cache = [
+                ("NONE", f"No models found for '{query}'", "Try another keyword or change provider", "ERROR", 0)
+            ]
+        else:
+            items = []
+            for i, hit in enumerate(hits):
+                raw_id = hit["id"]
+                prov = hit.get("provider", "online").lower()
+                full_key = f"{prov}:{raw_id}"
+                icon_id = 0
+                if pcoll is not None and hit.get("thumbnail_url"):
+                    if raw_id not in pcoll:
+                        thumb_path = download_thumbnail(raw_id, hit["thumbnail_url"])
+                        if thumb_path:
+                            try:
+                                pcoll.load(raw_id, thumb_path, "IMAGE")
+                            except Exception:
+                                pass
+                    if raw_id in pcoll:
+                        icon_id = pcoll[raw_id].icon_id
+
+                prov_tag = prov.upper()
+                poly_str = f"{hit['polycount']:,} verts" if hit.get("polycount") else "PBR asset"
+                label = f"[{prov_tag}] {hit['name']} ({poly_str})"
+                desc = f"{hit['credits']} | {hit['downloads']:,} downloads"
+                items.append((full_key, label, desc, icon_id or "OBJECT_DATA", i))
+            _search_results_cache = items
+
+        default_asset = "NONE"
+        if _search_results_cache and _search_results_cache[0][0] != "NONE":
+            default_asset = _search_results_cache[0][0]
+
+        self.selected_asset = default_asset
+
+    finally:
+        dispatch.set_client_status(None)
+        if context.window:
+            context.window.cursor_modal_restore()
+
+
+def _page_prev_callback(self, context):
+    if not self.page_prev:
+        return
+    self.page_prev = False
+    if self.search_page > 1:
+        self.search_page -= 1
+        run_online_search(self, context)
+
+
+def _page_next_callback(self, context):
+    if not self.page_next:
+        return
+    self.page_next = False
+    self.search_page += 1
+    run_online_search(self, context)
+
+
+def _open_url_callback(self, context):
+    if not self.open_url:
+        return
+    self.open_url = False
+
+    selected = self.selected_asset
+    if not selected or selected == "NONE":
+        return
+
+    if ":" in selected:
+        provider, asset_id = selected.split(":", 1)
+    else:
+        provider = self.search_provider
+        asset_id = selected
+
+    import webbrowser
+    url = ""
+    prov_lower = provider.lower()
+    if "polyhaven" in prov_lower:
+        url = f"https://polyhaven.com/a/{asset_id}"
+    elif "sketchfab" in prov_lower:
+        url = f"https://sketchfab.com/3d-models/{asset_id}"
+    elif "ambientcg" in prov_lower:
+        url = f"https://ambientcg.com/view?id={asset_id}"
+
+    if url:
+        webbrowser.open(url)
+
+
+def _run_search_callback(self, context):
+    if not self.trigger_search:
+        return
+    self.trigger_search = False
+    run_online_search(self, context)
+
+
+
 
 
 class MCP_OT_super_import(bpy.types.Operator):
@@ -309,12 +416,49 @@ class MCP_OT_super_import(bpy.types.Operator):
             ("AMBIENTCG", "ambientCG (CC0 PBR Assets)", "Search ambientCG materials & models", "FILE_IMAGE", 3),
         ],
         default="ALL",
+        update=lambda self, context: setattr(self, "search_page", 1),
     )
 
     search_query: bpy.props.StringProperty(
         name="Search Query",
         description="Keyword to search online models (e.g. chair, table, car, plant, bottle, sword)",
         default="chair",
+        update=lambda self, context: setattr(self, "search_page", 1),
+    )
+
+    trigger_search: bpy.props.BoolProperty(
+        name="Search Online",
+        description="Click to search online libraries",
+        default=False,
+        update=_run_search_callback,
+    )
+
+    search_page: bpy.props.IntProperty(
+        name="Page",
+        description="Current search result page",
+        default=1,
+        min=1,
+    )
+
+    page_prev: bpy.props.BoolProperty(
+        name="Previous Page",
+        description="Go to previous page of search results",
+        default=False,
+        update=_page_prev_callback,
+    )
+
+    page_next: bpy.props.BoolProperty(
+        name="Next Page",
+        description="Go to next page of search results",
+        default=False,
+        update=_page_next_callback,
+    )
+
+    open_url: bpy.props.BoolProperty(
+        name="View Online",
+        description="Open the model page in your web browser",
+        default=False,
+        update=_open_url_callback,
     )
 
     selected_asset: bpy.props.EnumProperty(
@@ -405,12 +549,25 @@ class MCP_OT_super_import(bpy.types.Operator):
             box_search = layout.box()
             box_search.label(text="Search Online 3D Libraries", icon="WORLD")
             box_search.prop(self, "search_provider")
-            box_search.prop(self, "search_query", text="Keyword", icon="VIEWZOOM")
+            
+            row = box_search.row(align=True)
+            row.prop(self, "search_query", text="Keyword", icon="VIEWZOOM")
+            row.prop(self, "trigger_search", text="Search Online", icon="VIEWZOOM", toggle=True)
+
+            # Pagination row
+            row_page = box_search.row(align=True)
+            row_page.prop(self, "page_prev", text="Previous Page", icon="TRIA_LEFT", toggle=True)
+            row_page.label(text=f"Page {self.search_page}", icon="FILE_TICK")
+            row_page.prop(self, "page_next", text="Next Page", icon="TRIA_RIGHT", toggle=True)
 
             box_search.separator()
             box_search.label(text="Found Models (Ordered by Relevance & Popularity):", icon="SORT_DESC")
             box_search.template_icon_view(self, "selected_asset", show_labels=True)
-            box_search.prop(self, "selected_asset", text="")
+            
+            row_sel = box_search.row(align=True)
+            row_sel.prop(self, "selected_asset", text="")
+            if self.selected_asset and self.selected_asset != "NONE":
+                row_sel.prop(self, "open_url", text="View Online (3D / Full)", icon="WORLD", toggle=True)
 
         elif self.source_type == "FILE":
             box_file = layout.box()
@@ -494,13 +651,19 @@ class MCP_OT_super_import(bpy.types.Operator):
             "collection_name": self.collection_name,
         }
 
-        result = TOOL_REGISTRY["super_import"].execute(params)
-        if not result.get("success"):
-            self.report({"ERROR"}, result.get("message", "Super import failed"))
-            return {"CANCELLED"}
+        if context.window:
+            context.window.cursor_modal_set("WAIT")
+        try:
+            result = TOOL_REGISTRY["super_import"].execute(params)
+            if not result.get("success"):
+                self.report({"ERROR"}, result.get("message", "Super import failed"))
+                return {"CANCELLED"}
 
-        self.report({"INFO"}, result["message"])
-        return {"FINISHED"}
+            self.report({"INFO"}, result["message"])
+            return {"FINISHED"}
+        finally:
+            if context.window:
+                context.window.cursor_modal_restore()
 
 
 class MCP_OT_normalize_model(bpy.types.Operator):
@@ -554,13 +717,167 @@ class MCP_OT_normalize_model(bpy.types.Operator):
             "center_xy": self.center_xy,
             "objects": selected if selected else None,
         }
-        result = TOOL_REGISTRY["normalize_model"].execute(params)
-        if not result.get("success"):
-            self.report({"ERROR"}, result.get("message", "Normalization failed"))
+        if context.window:
+            context.window.cursor_modal_set("WAIT")
+        try:
+            result = TOOL_REGISTRY["normalize_model"].execute(params)
+            if not result.get("success"):
+                self.report({"ERROR"}, result.get("message", "Normalization failed"))
+                return {"CANCELLED"}
+
+            self.report({"INFO"}, result["message"])
+            return {"FINISHED"}
+        finally:
+            if context.window:
+                context.window.cursor_modal_restore()
+
+
+class MCP_OT_simplify_mesh(bpy.types.Operator):
+    bl_idname = "mcp_bridge_pakkio.simplify_mesh"
+    bl_label = "Simplify Mesh"
+    bl_description = "Reduce vertex budget using decimate, voxel remesh, or form-preserving simplify geometry"
+    bl_options = {"REGISTER", "UNDO"}
+
+    simplifier_tool: bpy.props.EnumProperty(
+        name="Typology",
+        description="Simplification method to apply",
+        items=[
+            ("SIMPLIFY", "Simplify Geometry (Preserve Form)", "Form-preserving repair, curvature decimation & rollback quality gate", "MOD_DECIM", 0),
+            ("DECIMATE", "Decimate (Ratio/Collapse)", "Standard ratio decimation modifier", "MOD_SIMPLIFY", 1),
+            ("REMESH", "Voxel Remesh", "Uniform voxel reconstruction (destroys UVs)", "MOD_REMESH", 2),
+        ],
+        default="SIMPLIFY",
+    )
+
+    target_vertices: bpy.props.IntProperty(
+        name="Target Vertices",
+        description="Target vertex count budget per mesh object",
+        default=10000,
+        min=10,
+        max=10000000,
+    )
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=380)
+
+    def draw(self, context):
+        layout = self.layout
+        box = layout.box()
+        box.label(text="Mesh Reduction & Vertex Budget", icon="MOD_DECIM")
+        box.prop(self, "simplifier_tool")
+        box.prop(self, "target_vertices")
+
+        mesh_objs = [obj for obj in context.selected_objects if obj.type == "MESH"]
+        if not mesh_objs and context.active_object and context.active_object.type == "MESH":
+            mesh_objs = [context.active_object]
+
+        if mesh_objs:
+            count = len(mesh_objs)
+            names_preview = ", ".join([o.name for o in mesh_objs[:3]])
+            if count > 3:
+                names_preview += f"... (+{count - 3} more)"
+            box.label(text=f"Selected meshes ({count}): {names_preview}", icon="OBJECT_DATA")
+            total_verts = sum(len(o.data.vertices) for o in mesh_objs)
+            box.label(text=f"Total vertices: {total_verts:,}", icon="INFO")
+        else:
+            box.label(text="No meshes selected! (Select in 3D View)", icon="ERROR")
+
+    def execute(self, context):
+        import math
+
+        mesh_objs = [obj for obj in context.selected_objects if obj.type == "MESH"]
+        if not mesh_objs and context.active_object and context.active_object.type == "MESH":
+            mesh_objs = [context.active_object]
+
+        if not mesh_objs:
+            self.report({"WARNING"}, "No mesh objects selected in viewport")
             return {"CANCELLED"}
 
-        self.report({"INFO"}, result["message"])
-        return {"FINISHED"}
+        if context.window:
+            context.window.cursor_modal_set("WAIT")
+        try:
+            simplification_log = []
+            budget = self.target_vertices
+            success_count = 0
+
+            for obj in mesh_objs:
+                current_verts = len(obj.data.vertices)
+                if current_verts <= budget:
+                    simplification_log.append(f"'{obj.name}' already under budget ({current_verts} verts)")
+                    success_count += 1
+                    continue
+
+                if self.simplifier_tool == "SIMPLIFY":
+                    simplify_tool = TOOL_REGISTRY.get("simplify_geometry")
+                    if simplify_tool:
+                        res = simplify_tool.execute({
+                            "object_name": obj.name,
+                            "target": budget,
+                            "target_unit": "VERTICES",
+                        })
+                        if res.get("success"):
+                            simplification_log.append(
+                                f"Simplified '{obj.name}' ({current_verts} -> {res.get('result_vertices')} verts)"
+                            )
+                            success_count += 1
+                        else:
+                            # Fallback to decimate, matching super import logic
+                            decimate_tool = TOOL_REGISTRY.get("decimate_mesh")
+                            ratio = max(0.01, min(1.0, budget / current_verts))
+                            if decimate_tool:
+                                dec_res = decimate_tool.execute({"object_name": obj.name, "ratio": ratio})
+                                if dec_res.get("success"):
+                                    simplification_log.append(
+                                        f"Decimated '{obj.name}' (ratio {ratio:.2f}) due to gate rollback"
+                                    )
+                                    success_count += 1
+                                else:
+                                    simplification_log.append(f"Failed to simplify '{obj.name}'")
+                            else:
+                                simplification_log.append(f"Failed to simplify '{obj.name}'")
+
+                elif self.simplifier_tool == "DECIMATE":
+                    decimate_tool = TOOL_REGISTRY.get("decimate_mesh")
+                    if decimate_tool:
+                        ratio = max(0.01, min(1.0, budget / current_verts))
+                        res = decimate_tool.execute({"object_name": obj.name, "ratio": ratio})
+                        if res.get("success"):
+                            simplification_log.append(
+                                f"Decimated '{obj.name}' ({current_verts} -> {res.get('result_vertices')} verts, ratio {ratio:.2f})"
+                            )
+                            success_count += 1
+                        else:
+                            simplification_log.append(f"Failed to decimate '{obj.name}'")
+
+                elif self.simplifier_tool == "REMESH":
+                    remesh_tool = TOOL_REGISTRY.get("remesh_mesh")
+                    if remesh_tool:
+                        max_dim = max(obj.dimensions) if any(obj.dimensions) else 1.0
+                        N = max(10.0, min(200.0, math.sqrt(budget / 2.78)))
+                        voxel_size = max(0.001, max_dim / N)
+                        res = remesh_tool.execute({
+                            "object_name": obj.name,
+                            "mode": "VOXEL",
+                            "voxel_size": voxel_size,
+                        })
+                        if res.get("success"):
+                            simplification_log.append(
+                                f"Remeshed '{obj.name}' ({current_verts} -> {res.get('result_vertices')} verts, voxel {voxel_size:.4f})"
+                            )
+                            success_count += 1
+                        else:
+                            simplification_log.append(f"Failed to remesh '{obj.name}'")
+
+            summary = "; ".join(simplification_log)
+            if success_count > 0:
+                self.report({"INFO"}, f"Simplification done: {summary}")
+                return {"FINISHED"}
+            else:
+                self.report({"ERROR"}, f"Simplification failed: {summary}")
+                return {"CANCELLED"}
+        finally:
+            if context.window:
+                context.window.cursor_modal_restore()
 
 
 class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
@@ -577,6 +894,7 @@ class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
         layout.separator()
         layout.operator(MCP_OT_super_import.bl_idname, icon="IMPORT")
         layout.operator(MCP_OT_normalize_model.bl_idname, icon="ORIENTATION_GIMBAL")
+        layout.operator(MCP_OT_simplify_mesh.bl_idname, icon="MOD_DECIM")
         layout.separator()
         layout.operator(MCP_OT_create_checkpoint.bl_idname, icon="FILE_TICK")
         layout.operator(MCP_OT_regen_names.bl_idname, icon="WORLD")
@@ -587,6 +905,7 @@ class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
 CLASSES = (
     MCP_OT_super_import,
     MCP_OT_normalize_model,
+    MCP_OT_simplify_mesh,
     MCP_OT_create_checkpoint,
     MCP_OT_regen_names,
     MCP_OT_verify_tools,

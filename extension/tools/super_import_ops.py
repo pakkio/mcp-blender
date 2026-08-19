@@ -43,7 +43,7 @@ def get_polyhaven_models_index() -> dict[str, dict]:
         return _POLYHAVEN_CACHE or {}
 
 
-def search_polyhaven_models(query: str, limit: int = 15) -> list[dict]:
+def search_polyhaven_models(query: str, limit: int = 15, offset: int = 0) -> list[dict]:
     """Search Poly Haven models ranked by relevance & popularity."""
     assets = get_polyhaven_models_index()
     if not assets:
@@ -54,7 +54,7 @@ def search_polyhaven_models(query: str, limit: int = 15) -> list[dict]:
 
     if not words:
         ranked = sorted(assets.items(), key=lambda x: x[1].get("download_count", 0), reverse=True)
-        top_slice = ranked[:limit]
+        top_slice = ranked[offset:offset+limit]
     else:
         scored = []
         for asset_id, info in assets.items():
@@ -88,7 +88,7 @@ def search_polyhaven_models(query: str, limit: int = 15) -> list[dict]:
                 scored.append((final_score, asset_id, info))
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        top_slice = [(aid, inf) for _, aid, inf in scored[:limit]]
+        top_slice = [(aid, inf) for _, aid, inf in scored[offset:offset+limit]]
 
     hits = []
     for aid, inf in top_slice:
@@ -108,12 +108,12 @@ def search_polyhaven_models(query: str, limit: int = 15) -> list[dict]:
     return hits
 
 
-def search_sketchfab_models(query: str, limit: int = 15) -> list[dict]:
+def search_sketchfab_models(query: str, limit: int = 15, offset: int = 0) -> list[dict]:
     """Search Sketchfab models catalog via keyless public search API."""
     if not query:
         return []
     encoded_query = urllib.parse.quote_plus(query.strip())
-    api_url = f"https://api.sketchfab.com/v3/search?type=models&q={encoded_query}&downloadable=true&count={limit}"
+    api_url = f"https://api.sketchfab.com/v3/search?type=models&q={encoded_query}&downloadable=true&count={limit}&offset={offset}"
     req = urllib.request.Request(api_url, headers={"User-Agent": _USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=12) as resp:
@@ -143,10 +143,10 @@ def search_sketchfab_models(query: str, limit: int = 15) -> list[dict]:
         return []
 
 
-def search_ambientcg_assets(query: str, limit: int = 15) -> list[dict]:
+def search_ambientcg_assets(query: str, limit: int = 15, offset: int = 0) -> list[dict]:
     """Search ambientCG CC0 materials and assets."""
     encoded_query = urllib.parse.quote_plus(query.strip() if query else "Material")
-    api_url = f"https://ambientcg.com/api/v2/full_json?q={encoded_query}&limit={limit}&sort=Popular"
+    api_url = f"https://ambientcg.com/api/v2/full_json?q={encoded_query}&limit={limit}&sort=Popular&offset={offset}"
     req = urllib.request.Request(api_url, headers={"User-Agent": _USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=12) as resp:
@@ -173,19 +173,19 @@ def search_ambientcg_assets(query: str, limit: int = 15) -> list[dict]:
         return []
 
 
-def search_all_online_models(query: str, provider: str = "ALL", limit: int = 20) -> list[dict]:
+def search_all_online_models(query: str, provider: str = "ALL", limit: int = 20, offset: int = 0) -> list[dict]:
     """Search online assets across providers with unified importance ranking."""
     provider = (provider or "ALL").upper()
     all_hits = []
 
     if provider in ("ALL", "POLYHAVEN"):
-        all_hits.extend(search_polyhaven_models(query, limit=limit))
+        all_hits.extend(search_polyhaven_models(query, limit=limit, offset=offset))
 
     if provider in ("ALL", "SKETCHFAB"):
-        all_hits.extend(search_sketchfab_models(query, limit=limit))
+        all_hits.extend(search_sketchfab_models(query, limit=limit, offset=offset))
 
     if provider in ("ALL", "AMBIENTCG"):
-        all_hits.extend(search_ambientcg_assets(query, limit=limit))
+        all_hits.extend(search_ambientcg_assets(query, limit=limit, offset=offset))
 
     # Sort merged hits by popularity / downloads
     all_hits.sort(key=lambda x: x.get("downloads", 0), reverse=True)
@@ -241,10 +241,10 @@ def _get_sketchfab_token() -> str | None:
     if token:
         return token
 
-    # Check candidate .env locations across workspace and user directories
     candidates = [
         Path.home() / ".mcp_blender_pakkio" / ".env",
         Path.home() / ".env",
+        Path.home() / "w" / "mcp-blender" / ".env",
         Path.home() / "w" / "mcp-blender-pakkio" / ".env",
         Path.cwd() / ".env",
         Path(__file__).resolve().parent.parent.parent / ".env",
