@@ -240,11 +240,16 @@ def _localize_name(name: str, vocab: dict) -> str:
     clean = re.sub(r"_(primitive|submesh)\d*$", "", clean, flags=re.I)
     clean = re.sub(r"\.(fbx|gltf|glb|obj|blend|dae)$", "", clean, flags=re.I)
 
+    # Strip hex hashes and Sketchfab tags
+    clean = re.sub(r"[_\-\s][a-fA-F0-9]{32}\b", "", clean)
+    clean = re.sub(r"[_\-\s](?=.*\d)[a-fA-F0-9]{7,12}\b", "", clean)
+    clean = re.sub(r"[_\-\s]sketchfab\b", "", clean, flags=re.I)
+
     # Skip renaming if the name is purely generic (e.g. Cube.001, obj_01, Mesh_3)
     clean_lower = clean.lower().strip()
     clean_base = re.sub(r"[\d\.]+$", "", clean_lower).strip("_-. ")
     if clean_base in GENERIC_NAMES:
-        return name
+        return clean
 
     # Normalize technical root names
     if clean.lower() in ("rootnode", "sketchfab_model", "root_empty", "node"):
