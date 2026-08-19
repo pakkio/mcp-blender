@@ -140,6 +140,7 @@ from .shader_studio_ops import (
 )
 from .shape_key_ops import ManageShapeKeysTool
 from .simplify_geometry_ops import SimplifyGeometryTool
+from .super_import_ops import NormalizeModelTool, SuperImportTool
 from .studio_lighting_ops import (
     ConfigureLightLinkingTool,
     CreateLightingRigTool,
@@ -324,6 +325,9 @@ ALL_TOOLS = (
     SimplifyGeometryTool(),
     # --- 2.0.6 Additions: Localized structural renaming ---
     RegenElementNamesTool(),
+    # --- 2.0.7 Additions: Super import with auto simplification & budget ---
+    SuperImportTool(),
+    NormalizeModelTool(),
 )
 
 TOOL_REGISTRY = {tool.name: tool for tool in ALL_TOOLS}

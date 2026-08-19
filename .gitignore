@@ -19,6 +19,7 @@ extension/dist/
 exports/
 *.blend
 *.blend1
+*_preview.png
 
 # Secrets
 .env

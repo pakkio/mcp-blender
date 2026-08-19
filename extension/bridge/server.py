@@ -53,6 +53,7 @@ HEAVY_METHODS = frozenset({
     "create_scene_checkpoint",
     "restore_scene_checkpoint",
     "regen_element_names",
+    "super_import",
 })
 
 _loop: Optional[asyncio.AbstractEventLoop] = None

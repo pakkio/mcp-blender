@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "mcp_bridge_pakkio"
-version = "2.0.7"
+version = "2.0.8"
 name = "MCP Bridge Pakkio"
 tagline = "WebSocket bridge exposing Blender to MCP clients like Claude"
 maintainer = "Claudio Pacchiega <claudio.pacchiega@gmail.com>"
