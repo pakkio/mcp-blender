@@ -222,6 +222,13 @@ CATEGORY_TRANSLATIONS = {
 }
 
 
+GENERIC_NAMES = {
+    "cube", "cylinder", "sphere", "icosphere", "plane", "cone", "torus",
+    "suzanne", "monkey", "empty", "obj", "mesh", "object", "default",
+    "node", "primitive", "submesh", "part", "element"
+}
+
+
 def _localize_name(name: str, vocab: dict) -> str:
     """Translate compound keywords, strip exporter suffixes, and preserve indexing."""
     if not name:
@@ -232,6 +239,12 @@ def _localize_name(name: str, vocab: dict) -> str:
     clean = re.sub(r"__\d+$", "", clean)
     clean = re.sub(r"_(primitive|submesh)\d*$", "", clean, flags=re.I)
     clean = re.sub(r"\.(fbx|gltf|glb|obj|blend|dae)$", "", clean, flags=re.I)
+
+    # Skip renaming if the name is purely generic (e.g. Cube.001, obj_01, Mesh_3)
+    clean_lower = clean.lower().strip()
+    clean_base = re.sub(r"[\d\.]+$", "", clean_lower).strip("_-. ")
+    if clean_base in GENERIC_NAMES:
+        return name
 
     # Normalize technical root names
     if clean.lower() in ("rootnode", "sketchfab_model", "root_empty", "node"):
