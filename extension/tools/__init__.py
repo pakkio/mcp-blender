@@ -71,7 +71,7 @@ from .lattice_deform_ops import (
     DeformLatticePointsTool,
 )
 from .light_ops import ConfigureLightTool
-from .localization_ops import RegenElementNamesTool
+from .localization_ops import RegenElementNamesTool, SeparateLogicalAreasTool
 from .material_ops import (
     AssignMaterialTool,
     CreateMaterialTool,
@@ -325,6 +325,7 @@ ALL_TOOLS = (
     SimplifyGeometryTool(),
     # --- 2.0.6 Additions: Localized structural renaming ---
     RegenElementNamesTool(),
+    SeparateLogicalAreasTool(),
     # --- 2.0.7 Additions: Super import with auto simplification & budget ---
     SuperImportTool(),
     NormalizeModelTool(),

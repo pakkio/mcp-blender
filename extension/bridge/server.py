@@ -53,6 +53,7 @@ HEAVY_METHODS = frozenset({
     "create_scene_checkpoint",
     "restore_scene_checkpoint",
     "regen_element_names",
+    "separate_logical_areas",
     "super_import",
 })
 

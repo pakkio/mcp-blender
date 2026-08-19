@@ -155,6 +155,60 @@ class MCP_OT_regen_names(bpy.types.Operator):
                 context.window.cursor_modal_restore()
 
 
+class MCP_OT_separate_logical_areas(bpy.types.Operator):
+    bl_idname = "mcp_bridge_pakkio.separate_logical_areas"
+    bl_label = "Separate in Logical Areas"
+    bl_description = (
+        "Analyze the selected mesh, separate it into logical parts (loose parts or materials), "
+        "and organize them under parent Empties using semantic classification (from LLM in .env)"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    lang: bpy.props.EnumProperty(
+        name="Language",
+        description="Target language vocabulary",
+        items=[
+            ("it", "Italian (Italiano)", "Organize and translate names in Italian", "WORLD", 0),
+            ("en", "English", "Organize and translate names in English", "FONT_DATA", 1),
+        ],
+        default="it",
+    )
+
+    def invoke(self, context, event):
+        active_obj = context.active_object
+        if not active_obj or active_obj.type != "MESH":
+            self.report({"ERROR"}, "Please select a MESH object in the 3D viewport first.")
+            return {"CANCELLED"}
+        return context.window_manager.invoke_props_dialog(self, width=380)
+
+    def draw(self, context):
+        layout = self.layout
+        box = layout.box()
+        box.label(text="Separate Mesh in Logical Areas", icon="MESH_DATA")
+        box.prop(self, "lang")
+        
+        active_obj = context.active_object
+        if active_obj:
+            box.label(text=f"Selected: {active_obj.name}", icon="OBJECT_DATA")
+
+    def execute(self, context):
+        params = {"lang": self.lang}
+        
+        if context.window:
+            context.window.cursor_modal_set("WAIT")
+        try:
+            result = TOOL_REGISTRY["separate_logical_areas"].execute(params)
+            if not result.get("success"):
+                self.report({"ERROR"}, result.get("message", "Separation failed"))
+                return {"CANCELLED"}
+
+            self.report({"INFO"}, result["message"])
+            return {"FINISHED"}
+        finally:
+            if context.window:
+                context.window.cursor_modal_restore()
+
+
 # Skipped by default by the invoke-smoke-test in MCP_OT_verify_tools:
 # render/bake/batch/fluid tools can legitimately take real time even with no
 # target object, so blindly calling them from a health check would make
@@ -909,6 +963,7 @@ class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
         layout.separator()
         layout.operator(MCP_OT_create_checkpoint.bl_idname, icon="FILE_TICK")
         layout.operator(MCP_OT_regen_names.bl_idname, icon="WORLD")
+        layout.operator(MCP_OT_separate_logical_areas.bl_idname, icon="MESH_DATA")
         layout.separator()
         layout.operator(MCP_OT_verify_tools.bl_idname, icon="TOOL_SETTINGS")
 
@@ -919,6 +974,7 @@ CLASSES = (
     MCP_OT_simplify_mesh,
     MCP_OT_create_checkpoint,
     MCP_OT_regen_names,
+    MCP_OT_separate_logical_areas,
     MCP_OT_verify_tools,
     VIEW3D_PT_mcp_bridge,
 )

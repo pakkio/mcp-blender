@@ -598,3 +598,254 @@ class RegenElementNamesTool(ToolBase):
             "lang": lang,
             "root": report,
         }
+
+
+def _call_llm_classify(parts_info: list[dict], lang: str) -> dict:
+    """Call OpenAI or Anthropic LLM to classify mesh loose parts into logical semantic groups."""
+    import os
+    import json
+    import re
+    import urllib.request
+    import urllib.parse
+    from pathlib import Path
+    from ..config import load_env_vars
+
+    load_env_vars()
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    openai_key = os.environ.get("OPENAI_API_KEY")
+
+    if not anthropic_key and not openai_key:
+        return {}
+
+    system_prompt = (
+        "You are an expert 3D model semantic analyzer. "
+        "Given a list of separated mesh parts from a model (each has an 'index', 'name', 'center' coordinates [X, Y, Z], and 'materials' list), "
+        "your job is to analyze their names, materials, and spatial positions to organize them into logical groups. "
+        f"For example, if it's a car, group parts into 'Ruote' (Wheels), 'Portiere' (Doors), 'Vetri' (Glass), 'Scocca' (Chassis), 'Interni' (Interior), etc. "
+        f"If it's a human body, group them into 'Testa' (Head), 'Braccio Sinistro' (Left Arm), 'Braccio Destro' (Right Arm), 'Gambe' (Legs), 'Busto' (Torso), etc. "
+        f"Translate group and part names into '{lang}'. "
+        "Propose: "
+        "1. A mapping of logical group names (e.g. 'Ruote', 'Portiere') to the list of part indices that belong to them. "
+        "2. A mapping of each part index to a clean, semantic name (e.g. 'Ruota Anteriore Sinistra', 'Portiera Destra'). "
+        "You MUST return ONLY a JSON object of this structure (no markdown wrapper, just raw JSON):\n"
+        "{\n"
+        "  \"groups\": {\n"
+        "    \"GroupName1\": [0, 2, 4],\n"
+        "    \"GroupName2\": [1, 3]\n"
+        "  },\n"
+        "  \"names\": {\n"
+        "    \"0\": \"SemanticNameFor0\",\n"
+        "    \"1\": \"SemanticNameFor1\",\n"
+        "    \"2\": \"SemanticNameFor2\",\n"
+        "    \"3\": \"SemanticNameFor3\",\n"
+        "    \"4\": \"SemanticNameFor4\"\n"
+        "  }\n"
+        "}"
+    )
+
+    user_content = f"Here is the list of parts to classify:\n{json.dumps(parts_info, indent=2)}"
+
+    headers = {"Content-Type": "application/json"}
+    
+    if anthropic_key:
+        url = "https://api.anthropic.com/v1/messages"
+        headers.update({
+            "x-api-key": anthropic_key,
+            "anthropic-version": "2023-06-01"
+        })
+        payload = {
+            "model": "claude-3-5-sonnet-20241022",
+            "max_tokens": 4096,
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_content}]
+        }
+    elif openai_key:
+        url = "https://api.openai.com/v1/chat/completions"
+        headers.update({
+            "Authorization": f"Bearer {openai_key}"
+        })
+        payload = {
+            "model": "gpt-4o",
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ]
+        }
+    else:
+        return {}
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            response_data = json.loads(resp.read().decode("utf-8"))
+
+        if anthropic_key:
+            content_text = response_data["content"][0]["text"]
+        else:
+            content_text = response_data["choices"][0]["message"]["content"]
+
+        match = re.search(r"\{.*\}", content_text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        return json.loads(content_text)
+    except Exception as e:
+        print(f"[MCP Bridge] LLM classification request failed: {e}")
+        return {}
+
+
+class SeparateLogicalAreasTool(ToolBase):
+    name = "separate_logical_areas"
+    description = (
+        "Analyze the selected mesh, separate it into logical parts (by connectivity or materials), "
+        "use an LLM to classify and rename them semantically (e.g. wheels, doors, body, head, arms), "
+        "and organize them under parent Empties in a clean hierarchy."
+    )
+
+    def execute(self, params: dict) -> dict:
+        lang = (params.get("lang") or "it").strip().lower()
+        vocab = CATEGORY_TRANSLATIONS.get(lang)
+        if vocab is None:
+            vocab = CATEGORY_TRANSLATIONS["it"]
+
+        active_obj = bpy.context.active_object
+        if not active_obj or active_obj.type != "MESH":
+            return {"success": False, "message": "Please select a MESH object in the 3D viewport first."}
+
+        original_name = active_obj.name
+        original_collection = active_obj.users_collection[0] if active_obj.users_collection else bpy.context.scene.collection
+
+        # Save existing objects set to track changes
+        existing_objs = set(bpy.data.objects.keys())
+
+        # Step 1: Duplicate the active object
+        bpy.ops.object.select_all(action='DESELECT')
+        active_obj.select_set(True)
+        bpy.context.view_layer.objects.active = active_obj
+        bpy.ops.object.duplicate()
+        dup_obj = bpy.context.active_object
+        dup_obj.name = f"{original_name}_separate_temp"
+
+        # Step 2: Try separating by loose parts first
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.separate(type='LOOSE')
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        separated_pieces = [obj for name, obj in bpy.data.objects.items() if name not in existing_objs]
+
+        # If only 1 piece is returned, try separating by material!
+        if len(separated_pieces) <= 1:
+            for obj in separated_pieces:
+                bpy.data.objects.remove(obj, do_unlink=True)
+            
+            bpy.ops.object.select_all(action='DESELECT')
+            active_obj.select_set(True)
+            bpy.context.view_layer.objects.active = active_obj
+            
+            existing_objs = set(bpy.data.objects.keys())
+            
+            bpy.ops.object.duplicate()
+            
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.mesh.separate(type='MATERIAL')
+            bpy.ops.object.mode_set(mode='OBJECT')
+            
+            separated_pieces = [obj for name, obj in bpy.data.objects.items() if name not in existing_objs]
+
+        if not separated_pieces:
+            return {"success": False, "message": "Failed to separate the mesh into parts."}
+
+        # Step 3: Gather parts metadata
+        parts_info = []
+        for idx, obj in enumerate(separated_pieces):
+            parts_info.append({
+                "index": idx,
+                "name": obj.name,
+                "center": [round(c, 3) for c in obj.location],
+                "materials": [mat.name for mat in obj.data.materials if mat]
+            })
+
+        # Step 4: Call LLM to classify and map names
+        classification = _call_llm_classify(parts_info, lang)
+        
+        # Fallback if LLM classification is empty
+        if not classification or "groups" not in classification or "names" not in classification:
+            classification = {"groups": {}, "names": {}}
+            for idx, p in enumerate(parts_info):
+                mat_name = p["materials"][0] if p["materials"] else "Materiale_Generico"
+                if mat_name not in classification["groups"]:
+                    classification["groups"][mat_name] = []
+                classification["groups"][mat_name].append(idx)
+                classification["names"][str(idx)] = f"{original_name}_part_{idx}"
+
+        # Step 5: Rename and organize under a root Empty
+        bpy.ops.object.select_all(action='DESELECT')
+        
+        root_empty_name = f"{original_name}_Organizzato" if lang == "it" else f"{original_name}_Organized"
+        bpy.ops.object.empty_add(type='PLAIN_AXES', location=active_obj.location)
+        root_empty = bpy.context.active_object
+        root_empty.name = root_empty_name
+        
+        if root_empty.name not in original_collection.objects:
+            original_collection.objects.link(root_empty)
+        if original_collection != bpy.context.scene.collection:
+            if root_empty.name in bpy.context.scene.collection.objects:
+                try:
+                    bpy.context.scene.collection.objects.unlink(root_empty)
+                except Exception:
+                    pass
+
+        groups = classification.get("groups", {})
+        names = classification.get("names", {})
+
+        report_groups = []
+        for group_name, indices in groups.items():
+            bpy.ops.object.empty_add(type='PLAIN_AXES', location=active_obj.location)
+            group_empty = bpy.context.active_object
+            group_empty.name = group_name
+            group_empty.parent = root_empty
+            
+            if group_empty.name not in original_collection.objects:
+                original_collection.objects.link(group_empty)
+            if original_collection != bpy.context.scene.collection:
+                if group_empty.name in bpy.context.scene.collection.objects:
+                    try:
+                        bpy.context.scene.collection.objects.unlink(group_empty)
+                    except Exception:
+                        pass
+
+            group_pieces = []
+            for idx in indices:
+                try:
+                    obj_idx = int(idx)
+                    if obj_idx < len(separated_pieces):
+                        piece_obj = separated_pieces[obj_idx]
+                        new_name = names.get(str(idx), f"Part_{idx}")
+                        piece_obj.name = new_name
+                        if piece_obj.data:
+                            piece_obj.data.name = new_name
+                        piece_obj.parent = group_empty
+                        group_pieces.append(piece_obj.name)
+                except (ValueError, TypeError, IndexError):
+                    pass
+            report_groups.append({
+                "group": group_name,
+                "parts": group_pieces
+            })
+
+        active_obj.hide_viewport = True
+        active_obj.hide_render = True
+
+        return {
+            "success": True,
+            "message": f"Successfully separated '{original_name}' into {len(separated_pieces)} parts across {len(groups)} logical groups.",
+            "root_object": root_empty.name,
+            "groups": report_groups
+        }
