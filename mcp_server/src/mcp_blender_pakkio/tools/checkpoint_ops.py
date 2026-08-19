@@ -2,7 +2,7 @@ from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
-from ..bridge import BlenderBridge
+from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..errors import BridgeError, ErrorType
 
 
@@ -21,7 +21,9 @@ def register_checkpoint_tools(mcp: FastMCP, bridge: BlenderBridge):
     )
     async def create_scene_checkpoint(name: Optional[str] = None) -> dict:
         params = CreateCheckpointParams(name=name)
-        result = await bridge.send_request("create_scene_checkpoint", params.model_dump())
+        result = await bridge.send_request(
+            "create_scene_checkpoint", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S
+        )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "create_scene_checkpoint failed"))
         return result
@@ -32,7 +34,9 @@ def register_checkpoint_tools(mcp: FastMCP, bridge: BlenderBridge):
     )
     async def restore_scene_checkpoint(name: str) -> dict:
         params = RestoreCheckpointParams(name=name)
-        result = await bridge.send_request("restore_scene_checkpoint", params.model_dump())
+        result = await bridge.send_request(
+            "restore_scene_checkpoint", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S
+        )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "restore_scene_checkpoint failed"))
         return result

@@ -114,6 +114,175 @@ async def test_import_online_asset_happy_path_uses_simplify_geometry(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_import_online_asset_pushes_client_status_with_provider_target_and_credit(monkeypatch, tmp_path):
+    downloaded = DownloadedAsset(
+        filepath=str(tmp_path / "chair.glb"), provider="polyhaven", asset_id="chair1",
+        license="CC0", attribution="'chair1' by Poly Haven (CC0)", from_cache=False,
+    )
+    (tmp_path / "chair.glb").write_bytes(b"glb-bytes")
+    provider = _FakeProvider("polyhaven", download_result=downloaded)
+
+    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+
+    bridge = AsyncMock()
+
+    async def send_request(method, params, timeout=None):
+        if method == "import_file":
+            return {"success": True, "imported_objects": ["Chair_Mesh"]}
+        if method == "get_object_info":
+            return {
+                "success": True,
+                "type": "MESH",
+                "parent": None,
+                "dimensions": [1.0, 1.0, 1.0],
+                "mesh_data": {"polygons_count": 50000, "vertices_count": 26000},
+            }
+        if method == "simplify_geometry":
+            return {"success": True, "result_vertices": params["target"]}
+        return {"success": True}
+
+    bridge.send_request.side_effect = send_request
+
+    _search_fn, import_fn = register_asset_source_tools(FakeMCP(), bridge)
+    result = await import_fn(asset_id="chair1", provider="polyhaven", target_poly_budget=10000)
+
+    assert result["success"] is True
+
+    status_texts = [
+        call.args[1]["text"]
+        for call in bridge.send_request.await_args_list
+        if call.args[0] == "set_client_status"
+    ]
+    # First push (before the download even starts) names the provider --
+    # "where the model is found".
+    assert any("polyhaven" in t for t in status_texts if t)
+    # A push after the download names the license/attribution -- "credits".
+    assert any("CC0" in t and "chair1' by Poly Haven" in t for t in status_texts if t)
+    # A push during simplification carries the actual vertex target.
+    assert any("5200" in t for t in status_texts if t)  # 10000 * 26000/50000
+    # And it's cleared on completion (finally-clause), not left dangling.
+    assert status_texts[-1] is None
+
+
+def _standard_import_bridge(extra_responses=None):
+    """A send_request mock covering the common import_online_asset flow plus
+    preview capture and the post-reduction vertices_count re-fetch, so
+    per-test bodies only need to override what they actually care about."""
+    responses = {
+        "import_file": {"success": True, "imported_objects": ["Chair_Mesh"]},
+        "get_object_info": {
+            "success": True,
+            "type": "MESH",
+            "parent": None,
+            "dimensions": [2.0, 1.0, 1.0],
+            "mesh_data": {"polygons_count": 50000, "vertices_count": 26000},
+        },
+        "inspect_focus_shot": {"success": True, "image_base64": "ZmFrZS1wbmc="},
+    }
+    if extra_responses:
+        responses.update(extra_responses)
+
+    bridge = AsyncMock()
+
+    async def send_request(method, params, timeout=None):
+        if method in responses:
+            resp = responses[method]
+            return resp(params) if callable(resp) else resp
+        return {"success": True}
+
+    bridge.send_request.side_effect = send_request
+    return bridge
+
+
+def _setup_provider(monkeypatch, tmp_path, asset_id="chair1"):
+    downloaded = DownloadedAsset(
+        filepath=str(tmp_path / f"{asset_id}.glb"), provider="polyhaven", asset_id=asset_id,
+        license="CC0", attribution=f"'{asset_id}' by Poly Haven (CC0)", from_cache=False,
+    )
+    (tmp_path / f"{asset_id}.glb").write_bytes(b"glb-bytes")
+    provider = _FakeProvider("polyhaven", download_result=downloaded)
+    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_import_online_asset_includes_preview_vertices_and_credits(monkeypatch, tmp_path):
+    _setup_provider(monkeypatch, tmp_path)
+    bridge = _standard_import_bridge()
+
+    _search_fn, import_fn = register_asset_source_tools(FakeMCP(), bridge)
+    result = await import_fn(asset_id="chair1", provider="polyhaven")
+
+    assert result["success"] is True
+    assert result["preview_base64"] == "ZmFrZS1wbmc="
+    assert result["vertices_count"] == 26000
+    assert result["credits"] == "CC0 — 'chair1' by Poly Haven (CC0)"
+
+    preview_call = next(
+        c for c in bridge.send_request.await_args_list if c.args[0] == "inspect_focus_shot"
+    )
+    assert preview_call.args[1]["include_base64"] is True
+
+
+@pytest.mark.asyncio
+async def test_import_online_asset_include_preview_false_skips_capture(monkeypatch, tmp_path):
+    _setup_provider(monkeypatch, tmp_path)
+    bridge = _standard_import_bridge()
+
+    _search_fn, import_fn = register_asset_source_tools(FakeMCP(), bridge)
+    result = await import_fn(asset_id="chair1", provider="polyhaven", include_preview=False)
+
+    assert result["preview_base64"] is None
+    assert not any(c.args[0] == "inspect_focus_shot" for c in bridge.send_request.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_import_online_asset_reduction_method_decimate_skips_simplify(monkeypatch, tmp_path):
+    _setup_provider(monkeypatch, tmp_path)
+
+    def fake_decimate(params):
+        assert params["object_name"] == "Chair_Mesh"
+        return {"success": True, "result_vertices": 5200}
+
+    bridge = _standard_import_bridge(extra_responses={"decimate_mesh": fake_decimate})
+
+    _search_fn, import_fn = register_asset_source_tools(FakeMCP(), bridge)
+    result = await import_fn(
+        asset_id="chair1", provider="polyhaven", target_poly_budget=10000, reduction_method="decimate"
+    )
+
+    assert result["success"] is True
+    assert result["decimation_applied"]["objects"]["Chair_Mesh"]["method"] == "decimate_mesh"
+    assert not any(c.args[0] == "simplify_geometry" for c in bridge.send_request.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_import_online_asset_reduction_method_remesh_calls_remesh_mesh(monkeypatch, tmp_path):
+    _setup_provider(monkeypatch, tmp_path)
+
+    def fake_remesh(params):
+        assert params["object_name"] == "Chair_Mesh"
+        assert params["mode"] == "VOXEL"
+        assert params["voxel_size"] > 0
+        return {"success": True, "result_vertices": 4800}
+
+    bridge = _standard_import_bridge(extra_responses={"remesh_mesh": fake_remesh})
+
+    _search_fn, import_fn = register_asset_source_tools(FakeMCP(), bridge)
+    result = await import_fn(
+        asset_id="chair1", provider="polyhaven", target_poly_budget=10000, reduction_method="remesh"
+    )
+
+    assert result["success"] is True
+    applied = result["decimation_applied"]["objects"]["Chair_Mesh"]
+    assert applied["method"] == "remesh_mesh"
+    assert applied["result_vertices"] == 4800
+    assert not any(c.args[0] == "simplify_geometry" for c in bridge.send_request.await_args_list)
+    assert not any(c.args[0] == "decimate_mesh" for c in bridge.send_request.await_args_list)
+
+
+@pytest.mark.asyncio
 async def test_import_online_asset_falls_back_to_decimate_when_simplify_gate_fails(monkeypatch, tmp_path):
     downloaded = DownloadedAsset(
         filepath=str(tmp_path / "fork.glb"), provider="polyhaven", asset_id="fork1",
@@ -171,7 +340,11 @@ async def test_import_online_asset_download_error_returns_failure(monkeypatch, t
 
     assert result["success"] is False
     assert "SKETCHFAB_API_TOKEN" in result["message"]
-    bridge.send_request.assert_not_awaited()
+    # A download failure must short-circuit before touching Blender's actual
+    # import pipeline -- the only bridge traffic allowed is the best-effort
+    # client_status push (set on entry, cleared on the early return).
+    called_methods = {call.args[0] for call in bridge.send_request.await_args_list}
+    assert called_methods <= {"set_client_status"}
 
 
 @pytest.mark.asyncio

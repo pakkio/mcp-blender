@@ -1,11 +1,10 @@
-import base64
 from typing import Literal, Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
 from ..bridge import BlenderBridge
 from ..errors import BridgeError, ErrorType
-from ..vlm import VLMError, critique_image, is_configured
+from ..vlm import VLMError, critique_image, extract_png_bytes, is_configured
 
 EvalView = Literal["MULTIVIEW", "FOCUS"]
 
@@ -15,15 +14,6 @@ class EvaluateSceneVisuallyParams(BaseModel):
     target_object: Optional[str] = None
     view: EvalView = "MULTIVIEW"
     model: Optional[str] = None
-
-
-def _extract_png_bytes(result: dict, key: str) -> Optional[bytes]:
-    raw = result.get(key)
-    if not raw:
-        return None
-    if raw.startswith("data:"):
-        raw = raw.split(",", 1)[1]
-    return base64.b64decode(raw)
 
 
 def register_vision_eval_tools(mcp: FastMCP, bridge: BlenderBridge):
@@ -72,7 +62,7 @@ def register_vision_eval_tools(mcp: FastMCP, bridge: BlenderBridge):
         if not capture.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, capture.get("message", "scene capture failed"))
 
-        png_bytes = _extract_png_bytes(capture, image_key)
+        png_bytes = extract_png_bytes(capture, image_key)
         if not png_bytes:
             raise BridgeError(ErrorType.TOOL_EXECUTION, "Scene capture did not return image data")
 

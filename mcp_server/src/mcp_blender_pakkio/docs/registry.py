@@ -193,7 +193,7 @@ DOMAIN_DOCS: dict[str, dict[str, Any]] = {
         "description": "Search and import from online catalogs (Poly Haven, ambientCG, Sketchfab) or generate 3D models with AI (Meshy, Tripo3D, Trellis).",
         "actions": {
             "search_online": "Search 3D models, textures, or HDRIs. Params: query, asset_type ('MODEL'|'TEXTURE'|'HDRI'), providers (['polyhaven','sketchfab','meshy','tripo','trellis']), limit, free_only.",
-            "import_online": "Download and import online/generated asset into scene. Params: provider, asset_id, target_poly_budget, collection_path, location, scale_to_size.",
+            "import_online": "Download and import online/generated asset into scene. Params: provider, asset_id, target_poly_budget, reduction_method ('simplify'|'decimate'|'remesh', default auto simplify-with-decimate-fallback), collection_path, location, scale_to_size, include_preview (default true). Result carries vertices_count (final), preview_base64 (PNG of the placed asset), and credits (license + attribution combined).",
             "meshy_generate": "Direct shortcut to generate 3D model via Meshy AI text-to-3d. Params: prompt, art_style ('realistic'|'sculpture'), target_poly_budget, collection_path.",
             "tripo_generate": "Direct shortcut to generate 3D model via Tripo3D AI. Params: prompt, target_poly_budget, collection_path.",
             "asset_browser": "Import or catalog assets with Blender's native Asset Browser. Params: action ('IMPORT'|'MARK'|'CLEAR'), asset_name, library_name.",
@@ -212,6 +212,8 @@ DOMAIN_DOCS: dict[str, dict[str, Any]] = {
             "job_status": "Check status of background async job. Params: job_id.",
             "job_list": "List all running and finished background jobs.",
             "job_cancel": "Cancel a running background job. Params: job_id.",
+            "busy": "Non-blocking check for whether Blender's main thread is still busy with a previous heavy command (e.g. checkpoint_create, render, bake). Always answers instantly, even mid-operation. Response includes current.description (e.g. \"create_scene_checkpoint({\\\"name\\\":\\\"before_boolean\\\"}) — running for 12.3s\"), current.running_for_s, current.method, and queue_depth for anything else waiting behind it -- poll this instead of re-sending or waiting out a slow request's own timeout. No params.",
+            "regen": "Rename a scene element's category collections/Empties into a target language (default 'it'/Italian) via a keyword vocabulary, keep+report zero-object nodes instead of skipping them, and re-link every collection alphabetically. Params: lang (default 'it'), element (scope to one collection/root-Empty, default whole scene), use_vision (bool, also names mesh leaves like 'Chair_Mesh' by semantic role via a vision model -- requires OPENROUTER_API_KEY), max_vision_renames (default 15), vision_model.",
         },
     },
     "blender_rigging_anim": {

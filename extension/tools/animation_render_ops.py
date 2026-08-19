@@ -63,16 +63,32 @@ class RenderAnimationSequenceTool(ToolBase):
             output_filepath = os.path.join(bpy.app.tempdir, "blender_animation_output")
 
         scene = bpy.context.scene
+        if scene.camera is None:
+            return {"success": False, "message": "Scene has no active camera to render from"}
+
         scene.render.filepath = output_filepath
         scene.render.resolution_x = resolution_x
         scene.render.resolution_y = resolution_y
         scene.frame_start = frame_start
         scene.frame_end = frame_end
 
+        ffmpeg_fallback_reason = None
         if format_type == "FFMPEG":
-            scene.render.image_settings.file_format = "FFMPEG"
-            scene.render.ffmpeg.format = "MPEG4"
-            scene.render.ffmpeg.codec = "H264"
+            try:
+                scene.render.image_settings.file_format = "FFMPEG"
+                scene.render.ffmpeg.format = "MPEG4"
+                scene.render.ffmpeg.codec = "H264"
+            except TypeError as exc:
+                # "FFMPEG" is a statically-declared enum value on
+                # ImageFormatSettings.file_format but Blender gates it with a
+                # dynamic itemf that can reject it outright depending on
+                # build/context (reproduced on this build: fails even when
+                # bpy.app.build_options.codec_ffmpeg is True) -- fall back to
+                # a PNG sequence rather than raise, matching every other
+                # tool's "validate, don't crash" contract.
+                format_type = "PNG"
+                ffmpeg_fallback_reason = str(exc)
+                scene.render.image_settings.file_format = "PNG"
         elif format_type == "OPEN_EXR":
             scene.render.image_settings.file_format = "OPEN_EXR"
         else:
@@ -81,11 +97,16 @@ class RenderAnimationSequenceTool(ToolBase):
         # Render animation
         bpy.ops.render.render(animation=True)
 
+        message = f"Rendered animation sequence from frame {frame_start} to {frame_end}"
+        if ffmpeg_fallback_reason:
+            message += " (requested FFMPEG video output was unavailable in this Blender build/context, fell back to a PNG sequence)"
+
         return {
             "success": True,
-            "message": f"Rendered animation sequence from frame {frame_start} to {frame_end}",
+            "message": message,
             "output_filepath": output_filepath,
             "frame_range": [frame_start, frame_end],
             "format": format_type,
+            "ffmpeg_fallback_reason": ffmpeg_fallback_reason,
             "resolution": [resolution_x, resolution_y],
         }

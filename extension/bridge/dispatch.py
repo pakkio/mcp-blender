@@ -12,9 +12,30 @@ is thread-safe by design).
 A generation counter guards against stale queued work surviving an addon
 disable/enable or "Reload Scripts": register() bumps it, and any item
 dequeued under an older generation is failed instead of executed.
+
+_current_execution tracks whatever tool.execute() call is presently running
+on the main thread (or None). server.py's "bridge_status" method reads it
+directly from the background asyncio thread, guarded by a lock that is only
+ever held for the instant it takes to set/clear the record -- never for the
+duration of the tool call itself -- so a status check answers immediately
+even while a heavy tool blocks drain_queue for minutes. This is what lets a
+client poll "is Blender still busy with my last request" without waiting
+through that request's own timeout.
+
+_client_status is a separate, narrower overlay: mcp_server-side workflows
+that make several sequential bridge calls with real work in between that
+never touches bpy at all (e.g. import_online_asset downloading over HTTP
+before any Blender RPC happens) are invisible to _current_execution -- there
+is no bpy call in flight to report. mcp_server pushes a human-readable
+description of what it's doing via the "set_client_status" wire method
+(server.py, also answered without enqueueing) so Blender's own status bar
+can show it. Cleared the same way when the workflow finishes.
 """
 
+import json
 import queue
+import threading
+import time
 import traceback
 from concurrent.futures import Future
 from dataclasses import dataclass
@@ -29,6 +50,25 @@ _generation = 0
 _ACTIVE_INTERVAL_S = 0.05
 _MAX_IDLE_INTERVAL_S = 0.3
 _idle_streak = 0
+
+_status_lock = threading.Lock()
+_current_execution: Optional[dict] = None
+_client_status: Optional[dict] = None
+
+# Some params blobs are huge and not useful in a status check (execute_python's
+# "code", execute_batch's "commands"): cap the preview rather than ship the
+# whole thing over the wire on every busy poll.
+_PARAMS_PREVIEW_MAX_CHARS = 200
+
+
+def _preview_params(params: dict) -> str:
+    try:
+        text = json.dumps(params, default=str)
+    except Exception:
+        text = str(params)
+    if len(text) > _PARAMS_PREVIEW_MAX_CHARS:
+        text = text[:_PARAMS_PREVIEW_MAX_CHARS] + "...(truncated)"
+    return text
 
 
 @dataclass
@@ -120,6 +160,14 @@ def _handle_item(item: QueuedRequest) -> None:
             )
         return
 
+    with _status_lock:
+        global _current_execution
+        _current_execution = {
+            "method": item.method,
+            "params_preview": _preview_params(item.params),
+            "request_id": item.request_id,
+            "started_at": time.time(),
+        }
     try:
         result = tool.execute(item.params)
         if not item.future.done():
@@ -134,3 +182,38 @@ def _handle_item(item: QueuedRequest) -> None:
                     details=traceback.format_exc(),
                 )
             )
+    finally:
+        with _status_lock:
+            _current_execution = None
+
+
+def set_client_status(text: Optional[str]) -> None:
+    """Called from server.py for the "set_client_status" wire method. Passing
+    None/empty clears it -- mcp_server does this in a finally so a crashed
+    workflow can't leave a stale "Importing..." message stuck forever."""
+    global _client_status
+    with _status_lock:
+        _client_status = {"text": text, "started_at": time.time()} if text else None
+
+
+def get_status() -> dict:
+    """Non-blocking snapshot, safe to call from the background asyncio thread
+    even while the main thread is deep inside a heavy tool.execute() call."""
+    with _status_lock:
+        current = dict(_current_execution) if _current_execution else None
+        client = dict(_client_status) if _client_status else None
+    if current is not None:
+        current["running_for_s"] = round(time.time() - current["started_at"], 2)
+        current["description"] = (
+            f"{current['method']}({current['params_preview']}) "
+            f"— running for {current['running_for_s']}s"
+        )
+    if client is not None:
+        client["running_for_s"] = round(time.time() - client["started_at"], 2)
+    return {
+        "success": True,
+        "busy": current is not None or client is not None,
+        "current": current,
+        "client_status": client,
+        "queue_depth": _queue.qsize(),
+    }

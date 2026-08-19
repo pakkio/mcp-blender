@@ -71,6 +71,7 @@ from .lattice_deform_ops import (
     DeformLatticePointsTool,
 )
 from .light_ops import ConfigureLightTool
+from .localization_ops import RegenElementNamesTool
 from .material_ops import (
     AssignMaterialTool,
     CreateMaterialTool,
@@ -321,6 +322,8 @@ ALL_TOOLS = (
     SetupVFXShadowCatcherTool(),
     # --- 2.0.3 Additions: Budget-driven, form-preserving mesh simplification ---
     SimplifyGeometryTool(),
+    # --- 2.0.6 Additions: Localized structural renaming ---
+    RegenElementNamesTool(),
 )
 
 TOOL_REGISTRY = {tool.name: tool for tool in ALL_TOOLS}

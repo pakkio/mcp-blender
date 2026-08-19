@@ -4,6 +4,7 @@ host model calling this MCP server cannot itself see image content blocks.
 
 import base64
 import os
+from typing import Optional
 
 import httpx
 
@@ -18,6 +19,17 @@ class VLMError(Exception):
 
 def is_configured() -> bool:
     return bool(os.environ.get("OPENROUTER_API_KEY"))
+
+
+def extract_png_bytes(result: dict, key: str) -> Optional[bytes]:
+    """Shared by every caller that turns a bridge screenshot/capture result
+    (base64, optionally as a data: URI) into raw bytes for critique_image."""
+    raw = result.get(key)
+    if not raw:
+        return None
+    if raw.startswith("data:"):
+        raw = raw.split(",", 1)[1]
+    return base64.b64decode(raw)
 
 
 def resolve_model(override: str | None = None) -> str:

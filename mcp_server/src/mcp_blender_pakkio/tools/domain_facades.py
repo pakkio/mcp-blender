@@ -13,7 +13,9 @@ from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..docs.registry import search_docs
 from ..errors import BridgeError, ErrorType
 from .asset_source_ops import register_asset_source_tools
+from .bridge_status_ops import register_bridge_status_tools
 from .execute_python import register_execute_blender_python_tool
+from .localization_ops import register_localization_tools
 from .simplify_geometry_ops import register_simplify_geometry_tools
 from .vision_eval_ops import register_vision_eval_tools
 
@@ -335,10 +337,20 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "job_list",
             "job_cancel",
             "performance",
+            "busy",
+            "regen",
         ],
         params: Optional[dict[str, Any]] = None,
     ) -> dict:
         p = params or {}
+        if action == "regen":
+            return await regen_tool(
+                lang=p.get("lang", "it"),
+                element=p.get("element"),
+                use_vision=p.get("use_vision", False),
+                max_vision_renames=p.get("max_vision_renames", 15),
+                vision_model=p.get("vision_model"),
+            )
         method_map = {
             "info": "get_scene_info",
             "hierarchy": "organize_scene_hierarchy",
@@ -351,9 +363,26 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "job_list": "list_jobs",
             "job_cancel": "cancel_job",
             "performance": "inspect_scene_performance",
+            "busy": "bridge_status",
         }
         method = method_map.get(action, action)
-        return await _dispatch_bridge(bridge, method, p)
+        # "busy" answers instantly straight off the websocket thread (see
+        # extension/bridge/server.py) regardless of what's running on the
+        # main thread, so it never needs the heavy timeout -- it's the one
+        # action explicitly meant to work *while* something else is heavy.
+        timeout = HEAVY_REQUEST_TIMEOUT_S if action in ("checkpoint_create", "checkpoint_restore") else None
+        return await _dispatch_bridge(bridge, method, p, timeout=timeout)
+
+    # Kept standalone (also reachable via blender_scene(action="busy")): a
+    # non-blocking busy check is meant to be reached for quickly while
+    # something else may be mid-flight, so it gets its own top-level tool
+    # rather than being buried a level down in a params dict.
+    register_bridge_status_tools(mcp, bridge)
+
+    # Kept standalone (also reachable via blender_scene(action="regen")): the
+    # literal `regen("it")`-style call this was asked for is worth a direct
+    # top-level tool, not just a nested action.
+    regen_tool = register_localization_tools(mcp, bridge)
 
     # 6. Rigging, Hair Curves & Animation
     @mcp.tool(

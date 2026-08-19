@@ -42,7 +42,7 @@ ADDON_PACKAGE = __package__
 
 from . import config  # noqa: E402
 from .bridge import dispatch, start_server, stop_server  # noqa: E402
-from .panels import CLASSES  # noqa: E402
+from .panels import CLASSES, draw_bridge_status, tick_statusbar_redraw  # noqa: E402
 from .tools.progress_hud_ops import remove_draw_handler  # noqa: E402
 
 
@@ -61,6 +61,11 @@ def register() -> None:
         bpy.app.timers.register(dispatch.drain_queue, first_interval=0.05, persistent=True)
         _TIMER_REGISTERED = True
 
+    if not bpy.app.timers.is_registered(tick_statusbar_redraw):
+        bpy.app.timers.register(tick_statusbar_redraw, first_interval=1.0, persistent=True)
+
+    bpy.types.STATUSBAR_HT_header.append(draw_bridge_status)
+
     start_server()
 
 
@@ -69,6 +74,19 @@ def unregister() -> None:
 
     dispatch.bump_generation()
     stop_server()
+
+    bpy.types.STATUSBAR_HT_header.remove(draw_bridge_status)
+
+    if bpy.app.timers.is_registered(tick_statusbar_redraw):
+        bpy.app.timers.unregister(tick_statusbar_redraw)
+
+    # Clear any header_text_set() the timer left behind -- otherwise a
+    # disable while busy leaves stale status text stuck over the normal
+    # View/Select/Add menus forever, since nothing else will ever clear it.
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == "VIEW_3D":
+                area.header_text_set(None)
 
     if _TIMER_REGISTERED and bpy.app.timers.is_registered(dispatch.drain_queue):
         bpy.app.timers.unregister(dispatch.drain_queue)

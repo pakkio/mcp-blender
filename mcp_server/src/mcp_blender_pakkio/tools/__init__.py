@@ -14,6 +14,7 @@ from .asset_browser_ops import register_asset_browser_tools
 from .asset_source_ops import register_asset_source_tools
 from .batch_execution_ops import register_batch_execution_tools
 from .boolean_ops import register_boolean_tools
+from .bridge_status_ops import register_bridge_status_tools
 from .camera_ops import register_camera_tools
 from .checkpoint_ops import register_checkpoint_tools
 from .collection_ops import register_collection_tools
@@ -34,6 +35,7 @@ from .io_ops import register_io_tools
 from .job_ops import register_job_tools
 from .lattice_deform_ops import register_lattice_deform_tools
 from .light_ops import register_light_tools
+from .localization_ops import register_localization_tools
 from .material_ops import register_material_tools
 from .mesh_operation import register_mesh_operation_tool
 from .modifier_ops import register_modifier_tools
@@ -147,6 +149,10 @@ REGISTER_FUNCS = (
     register_vfx_tracking_tools,
     # --- 2.0.3 Additions: Budget-driven, form-preserving mesh simplification ---
     register_simplify_geometry_tools,
+    # --- 2.0.6 Additions: Non-blocking busy/status check ---
+    register_bridge_status_tools,
+    # --- 2.0.6 Additions: Localized structural renaming ---
+    register_localization_tools,
 )
 
 

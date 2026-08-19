@@ -50,6 +50,9 @@ HEAVY_METHODS = frozenset({
     "decimate_mesh",
     "remesh_mesh",
     "simplify_geometry",
+    "create_scene_checkpoint",
+    "restore_scene_checkpoint",
+    "regen_element_names",
 })
 
 _loop: Optional[asyncio.AbstractEventLoop] = None
@@ -97,6 +100,34 @@ async def _handle_client(websocket) -> None:
                             request_id, protocol.INVALID_JSON, "Request is missing 'method'"
                         )
                     )
+                )
+            except Exception:
+                pass
+            return
+
+        if method == "bridge_status":
+            # Answered here, never enqueued: dispatch.get_status() only reads
+            # a lock-guarded snapshot, so this replies instantly even while
+            # the main thread is stuck inside a heavy tool for minutes --
+            # that immediacy is the entire point of a busy-check.
+            try:
+                await websocket.send(
+                    json.dumps(protocol.success_envelope(request_id, dispatch.get_status()))
+                )
+            except Exception:
+                pass
+            return
+
+        if method == "set_client_status":
+            # Also answered here rather than enqueued: it's a plain metadata
+            # write (see dispatch.set_client_status), not a bpy operation, so
+            # there's no reason to make it wait behind whatever's already
+            # queued -- and it needs to work precisely when the main thread
+            # is busy, since that's when mcp_server calls it.
+            dispatch.set_client_status(params.get("text"))
+            try:
+                await websocket.send(
+                    json.dumps(protocol.success_envelope(request_id, {"success": True}))
                 )
             except Exception:
                 pass
