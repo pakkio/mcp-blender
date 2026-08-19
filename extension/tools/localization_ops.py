@@ -128,6 +128,35 @@ CATEGORY_TRANSLATIONS = {
         "root": "Radice",
         "body": "Corpo",
         "head": "Testa",
+        # Directional and relative terms
+        "left": "sinistro",
+        "right": "destro",
+        "front": "anteriore",
+        "back": "posteriore",
+        "rear": "posteriore",
+        "top": "superiore",
+        "bottom": "inferiore",
+        "inside": "interno",
+        "outside": "esterno",
+        # Materials
+        "wood": "Legno",
+        "metal": "Metallo",
+        "plastic": "Plastica",
+        "glass": "Vetro",
+        "leather": "Pelle",
+        "fabric": "Tessuto",
+        "gold": "Oro",
+        "silver": "Argento",
+        "bronze": "Bronzo",
+        "chrome": "Cromo",
+        "brass": "Ottone",
+        "steel": "Acciaio",
+        "copper": "Rame",
+        "iron": "Ferro",
+        "rubber": "Gomma",
+        "stone": "Pietra",
+        "concrete": "Cemento",
+        "marble": "Marmo",
         # Sketchfab & 3D Exporter Transliterations
         "nogi": "Gambe",
         "noga": "Gamba",
@@ -182,6 +211,13 @@ CATEGORY_TRANSLATIONS = {
         "rul": "Steering_Wheel",
         "ruchka": "Handle",
         "dver": "Door",
+        "left": "Left",
+        "right": "Right",
+        "front": "Front",
+        "back": "Back",
+        "rear": "Rear",
+        "top": "Top",
+        "bottom": "Bottom",
     },
 }
 
@@ -201,10 +237,12 @@ def _localize_name(name: str, vocab: dict) -> str:
     if clean.lower() in ("rootnode", "sketchfab_model", "root_empty", "node"):
         clean = "Modello" if vocab.get("scene") == "Scena" else "Model"
 
-    parts = re.split(r"([_\-\s]+)", clean)
+    parts = re.split(r"([_\-\s\.]+|\d+)", clean)
     translated = []
     for p in parts:
-        if re.match(r"^[_\-\s]+$", p) or p.isdigit():
+        if not p:
+            continue
+        if re.match(r"^[_\-\s\.]+$", p) or p.isdigit():
             translated.append(p)
         else:
             word_key = p.lower().strip()

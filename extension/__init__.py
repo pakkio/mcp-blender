@@ -11,7 +11,7 @@ is the entire lifecycle surface that matters.
 bl_info = {
     "name": "MCP Bridge Pakkio",
     "author": "Claudio Pacchiega",
-    "version": (2, 0, 13),
+    "version": (2, 0, 14),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > MCP Bridge",
     "description": "WebSocket bridge exposing Blender to MCP clients like Claude",
