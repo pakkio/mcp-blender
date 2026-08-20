@@ -15,8 +15,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "extension" / "blender_manifest.toml"
 PYPROJECT = REPO_ROOT / "mcp_server" / "pyproject.toml"
+PACKAGE_INIT = REPO_ROOT / "mcp_server" / "src" / "mcp_blender_pakkio" / "__init__.py"
 
 _VERSION_RE = re.compile(r'^\s*version\s*=\s*["\']([^"\']+)["\']', re.MULTILINE)
+_DUNDER_VERSION_RE = re.compile(r'^\s*__version__\s*=\s*["\']([^"\']+)["\']', re.MULTILINE)
 
 
 def _read_version(path: Path) -> str:
@@ -35,6 +37,22 @@ def test_extension_and_server_versions_match():
         f"but mcp_server/pyproject.toml is {pyproject_version}. "
         "Bump both together -- the build names the zip from the manifest while "
         "the README and package metadata quote pyproject."
+    )
+
+
+def test_package_dunder_version_matches():
+    """`__version__` is what `import mcp_blender_pakkio` reports at runtime.
+
+    It sat at 2.0.8 while the project shipped through 2.0.23 -- nothing compared
+    it against anything, so it drifted 15 releases without notice.
+    """
+    if not PACKAGE_INIT.is_file():
+        pytest.skip(f"{PACKAGE_INIT} not present")
+    match = _DUNDER_VERSION_RE.search(PACKAGE_INIT.read_text(encoding="utf-8"))
+    assert match, f"no __version__ found in {PACKAGE_INIT}"
+    assert match.group(1) == _read_version(PYPROJECT), (
+        f"__version__ is {match.group(1)} but pyproject.toml is "
+        f"{_read_version(PYPROJECT)}; bump both together."
     )
 
 

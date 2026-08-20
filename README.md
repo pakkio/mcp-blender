@@ -1,4 +1,4 @@
-# mcp-blender-pakkio (v2.0.23)
+# mcp-blender-pakkio (v2.0.24)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender-pakkio` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.23) |
+| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.24) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **138 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -187,7 +187,7 @@ Blender is Z-up; glTF, FBX, USD, Maya/Unity/3ds Max exports and most STL files a
 - **v2.0.4 fix**: `simplify_geometry` on a large mesh (weld + dissolve + iterative collapse solve + deviation sampling) can run past 15s, but the Blender-side bridge wasn't in its long-timeout allowlist -- it would report "Blender did not respond in time" after 15s while the tool kept running, silently dropping the eventual result. Fixed in `extension/bridge/server.py`'s `HEAVY_METHODS`, with a regression test (`test_heavy_timeout_consistency.py`) checking every mcp_server-side heavy call has a matching entry there.
 
 > **Version note**: v2.0.9 -- v2.0.12 and v2.0.20 -- v2.0.22 were never released; the
-> series jumps 2.0.8 → 2.0.13 → 2.0.19 → 2.0.23. Section headings below cite the release a
+> series jumps 2.0.8 → 2.0.13 → 2.0.19 → 2.0.23 → 2.0.24. Section headings below cite the release a
 > change actually shipped in, so those gaps are expected rather than missing entries.
 
 ### 22. Paginated Asset Search (v2.0.13)
@@ -231,7 +231,7 @@ Generation can be driven from **inside Blender**, not only from the MCP server:
 - The viewport panel gained a **modal operator with a background worker and live status callbacks**, so a multi-minute generation reports progress in the viewport instead of blocking the UI.
 - mcp_server's Meshy provider gained a `texture: bool = True` flag on `download()`: `texture=False` skips the `refine` stage for a faster untextured result, and caches under a distinct `_untextured` id so the two variants don't collide.
 
-### 28. Facade Parameter Validation & Rig Aiming (v2.0.23)
+### 28. Facade Parameter Validation & Rig Aiming (v2.0.24)
 The domain facades used to forward `params` straight through to the Blender side, where each tool reads the keys it knows via `params.get(...)`. A misnamed key was therefore dropped **in silence**: the call returned `success` while doing nothing. Two real cases: `blender_material(action='create', params={'color': ...})` reported success and produced a default grey material, and `blender_camera_lighting(action='studio_lighting', params={'target': ..., 'distance': ...})` reported success and built the rig at the world origin.
 
 - **Unknown parameters now raise** a `validation_error` naming the offending key and listing the accepted ones, instead of being discarded. Methods without a declared spec keep the previous pass-through, so this is additive.
@@ -256,11 +256,11 @@ The unified `.env` loader (v2.0.17) reads these. Each is only needed for the pro
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.23.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.24.zip
 ```
 
 3. In Blender 4.2+, open **Preferences > Get Extensions > Install from Disk...**,
-   select `dist/mcp_bridge_pakkio-2.0.23.zip`, and enable **MCP Bridge Pakkio**.
+   select `dist/mcp_bridge_pakkio-2.0.24.zip`, and enable **MCP Bridge Pakkio**.
 
 ### 2. Install the MCP Server
 
