@@ -8,7 +8,13 @@ class CreateObjectTool(ToolBase):
     description = "Create mesh primitives, empty, camera, light, text, or curve objects in the scene."
 
     def execute(self, params: dict) -> dict:
-        object_type = (params.get("object_type") or "CUBE").upper()
+        # blender_mesh's params dict has no schema, so a caller guessing the
+        # wrong key name (e.g. "type" or "shape" instead of "object_type")
+        # would otherwise silently fall through to CUBE while "name" still
+        # applies -- accept the common near-misses instead of guessing wrong.
+        object_type = (
+            params.get("object_type") or params.get("type") or params.get("shape") or "CUBE"
+        ).upper()
         location = tuple(params.get("location") or (0.0, 0.0, 0.0))
         radius = params.get("radius")
         size = params.get("size")
@@ -110,8 +116,9 @@ class CreateObjectTool(ToolBase):
         if params.get("name"):
             obj.name = params["name"]
 
-        if params.get("rotation_euler"):
-            obj.rotation_euler = tuple(params["rotation_euler"])
+        rotation_euler = params.get("rotation_euler") or params.get("rotation")
+        if rotation_euler:
+            obj.rotation_euler = tuple(rotation_euler)
 
         if params.get("scale"):
             obj.scale = tuple(params["scale"])

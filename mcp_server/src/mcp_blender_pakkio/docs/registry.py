@@ -162,7 +162,7 @@ DOMAIN_DOCS: dict[str, dict[str, Any]] = {
     "blender_mesh": {
         "description": "3D modeling, mesh manipulation, geometry transforms, booleans, decimation, remeshing, and UVs.",
         "actions": {
-            "create": "Create 3D primitives (CUBE, SPHERE, CYLINDER, CONE, TORUS, PLANE, MONKEY, EMPTY, CURVE). Params: type, name, location, rotation, scale.",
+            "create": "Create 3D primitives (CUBE, UV_SPHERE, ICO_SPHERE, CYLINDER, CONE, TORUS, PLANE, GRID, MONKEY, CIRCLE, EMPTY, CAMERA, LIGHT, TEXT, CURVE_BEZIER, CURVE_CIRCLE). Params: object_type (not 'type' -- unrecognized keys are silently ignored and default to CUBE), name, location, rotation_euler, scale, radius, size, collection.",
             "delete": "Delete one or more objects by name. Params: name or names.",
             "duplicate": "Duplicate an object with optional transform offset. Params: object_name, location_offset, linked.",
             "transform": "Set absolute/relative location, rotation_euler, or scale on an object. Params: name, location, rotation_euler, scale, relative.",

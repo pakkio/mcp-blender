@@ -9,6 +9,7 @@ import math
 import os
 import re
 import tempfile
+import time
 import urllib.parse
 import urllib.request
 import zipfile
@@ -240,6 +241,183 @@ def _get_sketchfab_token() -> str | None:
     from ..config import load_env_vars
     load_env_vars()
     return os.environ.get("SKETCHFAB_API_TOKEN")
+
+
+def _post_json(url: str, headers: dict, payload: dict) -> dict:
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={**headers, "Content-Type": "application/json", "User-Agent": _USER_AGENT},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _get_json(url: str, headers: dict) -> dict:
+    req = urllib.request.Request(url, headers={**headers, "User-Agent": _USER_AGENT})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+# Hard wall-clock cap on the whole create+poll+download cycle, independent of
+# how many iterations that takes -- per-call urlopen timeouts bound a single
+# request, not the loop, so a run of slow-but-succeeding calls could otherwise
+# add up to far longer than intended (see: 10+ minute in-Blender freeze this
+# guards against when generation ran synchronously on the main thread).
+_AI_GEN_DEADLINE_S = 480.0
+_AI_GEN_POLL_INTERVAL_S = 3.0
+
+
+def _poll_meshy_task(base_url: str, task_id: str, headers: dict, status_cb, label: str) -> dict:
+    """Poll a Meshy task (preview or refine share the same GET .../{id} +
+    status contract) until SUCCEEDED, bounded by its own wall-clock deadline."""
+    task_url = f"{base_url}/{task_id}"
+    last_status = "UNKNOWN"
+    deadline = time.monotonic() + _AI_GEN_DEADLINE_S
+    while time.monotonic() < deadline:
+        try:
+            data = _get_json(task_url, headers)
+        except Exception as exc:
+            raise ValueError(f"Meshy {label} task lookup failed: {exc}") from exc
+        last_status = data.get("status", last_status)
+        progress = data.get("progress")
+        if status_cb:
+            status_cb(f"Meshy ({label}): {last_status}" + (f" ({progress}%)" if progress is not None else ""))
+        if last_status == "SUCCEEDED":
+            return data
+        if last_status in ("FAILED", "CANCELED", "EXPIRED"):
+            err = (data.get("task_error") or {}).get("message") or "Unknown error"
+            raise ValueError(f"Meshy {label} {last_status}: {err}")
+        time.sleep(_AI_GEN_POLL_INTERVAL_S)
+    raise ValueError(f"Meshy {label} timed out for task '{task_id}' (last status: {last_status})")
+
+
+def _generate_meshy_model(prompt: str, dest_dir: Path, status_cb=None, texture: bool = True) -> tuple[Path, str]:
+    """Text-to-3D via Meshy AI: create a preview (untextured geometry) task,
+    poll it, then -- since texture=True by default -- submit and poll a
+    'refine' task against it to bake PBR textures (Meshy has no single-call
+    textured mode) before downloading the final GLB. Pure network/file I/O,
+    no bpy calls -- safe to run on a background thread; status_cb(str), if
+    given, is called on every poll tick so a caller polling from Blender's
+    main thread can show live progress without blocking on this."""
+    from ..config import load_env_vars
+    load_env_vars()
+    token = os.environ.get("MESHY_API_KEY")
+    if not token:
+        raise ValueError(
+            "Meshy AI generation requires a free MESHY_API_KEY. "
+            "Get one at https://www.meshy.ai/api and add it to your .env file."
+        )
+
+    headers = {"Authorization": f"Bearer {token}"}
+    base_url = "https://api.meshy.ai/v2/text-to-3d"
+    if status_cb:
+        status_cb(f"Meshy: submitting prompt '{prompt}'...")
+    try:
+        created = _post_json(base_url, headers, {"mode": "preview", "prompt": prompt, "art_style": "realistic"})
+    except Exception as exc:
+        raise ValueError(f"Meshy task creation failed: {exc}") from exc
+    task_id = created.get("result")
+    if not task_id:
+        raise ValueError(f"No task ID returned by Meshy: {created}")
+
+    data = _poll_meshy_task(base_url, task_id, headers, status_cb, "preview")
+
+    if texture:
+        try:
+            refined = _post_json(base_url, headers, {"mode": "refine", "preview_task_id": task_id})
+        except Exception as exc:
+            raise ValueError(f"Meshy refine (texturing) task creation failed: {exc}") from exc
+        refine_task_id = refined.get("result")
+        if not refine_task_id:
+            raise ValueError(f"No refine task ID returned by Meshy: {refined}")
+        data = _poll_meshy_task(base_url, refine_task_id, headers, status_cb, "refine")
+
+    model_url = data.get("model_urls", {}).get("glb") or data.get("model_url")
+    if not model_url:
+        raise ValueError(f"Meshy task '{task_id}' succeeded but returned no downloadable model URL")
+
+    if status_cb:
+        status_cb("Meshy: downloading generated model...")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_file = dest_dir / "model.glb"
+    _download_url(model_url, dest_file)
+    return dest_file, f"Meshy AI ('{prompt}')"
+
+
+def _generate_tripo_model(prompt: str, dest_dir: Path, status_cb=None) -> tuple[Path, str]:
+    """Text-to-3D via Tripo3D: create a task, poll until it succeeds, then
+    download the resulting GLB. Same threading contract as
+    _generate_meshy_model above."""
+    from ..config import load_env_vars
+    load_env_vars()
+    token = os.environ.get("TRIPO_API_KEY")
+    if not token:
+        raise ValueError(
+            "Tripo3D generation requires a free TRIPO_API_KEY. "
+            "Get one at https://platform.tripo3d.ai and add it to your .env file."
+        )
+
+    headers = {"Authorization": f"Bearer {token}"}
+    base_url = "https://api.tripo3d.ai/v2/openapi"
+    if status_cb:
+        status_cb(f"Tripo3D: submitting prompt '{prompt}'...")
+    try:
+        created = _post_json(f"{base_url}/task", headers, {"type": "text_to_model", "prompt": prompt})
+    except Exception as exc:
+        raise ValueError(f"Tripo3D task creation failed: {exc}") from exc
+    task_id = (created.get("data") or {}).get("task_id")
+    if not task_id:
+        raise ValueError(f"No task_id returned by Tripo3D: {created}")
+
+    task_url = f"{base_url}/task/{task_id}"
+    model_url = None
+    last_status = "unknown"
+    deadline = time.monotonic() + _AI_GEN_DEADLINE_S
+    while time.monotonic() < deadline:
+        try:
+            data = _get_json(task_url, headers)
+        except Exception as exc:
+            raise ValueError(f"Tripo3D task lookup failed: {exc}") from exc
+        payload = data.get("data") or {}
+        last_status = payload.get("status", last_status)
+        progress = payload.get("progress")
+        if status_cb:
+            status_cb(f"Tripo3D: {last_status}" + (f" ({progress}%)" if progress is not None else ""))
+        if last_status == "success":
+            model_url = (payload.get("output") or {}).get("model")
+            break
+        if last_status in ("failed", "cancelled", "banned", "expired"):
+            raise ValueError(f"Tripo3D generation {last_status} for prompt '{prompt}'")
+        time.sleep(_AI_GEN_POLL_INTERVAL_S)
+
+    if not model_url:
+        raise ValueError(f"Tripo3D generation timed out for prompt '{prompt}' (last status: {last_status})")
+
+    if status_cb:
+        status_cb("Tripo3D: downloading generated model...")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_file = dest_dir / "model.glb"
+    _download_url(model_url, dest_file)
+    return dest_file, f"Tripo3D ('{prompt}')"
+
+
+def generate_ai_model_job(provider: str, prompt: str, status_cb=None) -> tuple[Path, str]:
+    """Shared entry point for MESHY/TRIPO text-to-3D generation. Pure network
+    I/O -- no bpy calls -- so callers that care about not freezing Blender's
+    UI (e.g. the viewport panel's AI Generate button) can run this on a
+    background thread and poll status_cb's output from a bpy.app.timers/modal
+    tick instead of blocking the main thread for the whole generation."""
+    provider = provider.upper()
+    cache_key = f"{provider.lower()}_prompt_{prompt.replace(' ', '_')[:40]}"
+    cache_dir = Path(tempfile.gettempdir()) / "mcp_blender_assets" / provider.lower() / cache_key
+    if provider == "MESHY":
+        return _generate_meshy_model(prompt, cache_dir, status_cb=status_cb)
+    if provider == "TRIPO":
+        return _generate_tripo_model(prompt, cache_dir, status_cb=status_cb)
+    raise ValueError(f"Unknown AI provider '{provider}' (expected MESHY or TRIPO)")
 
 
 def _download_sketchfab_asset(asset_id: str, dest_dir: Path) -> tuple[Path | None, str, str]:
@@ -519,7 +697,8 @@ class SuperImportTool(ToolBase):
     name = "super_import"
     description = (
         "Super Import 3D assets from multi-provider online search (Poly Haven CC0, ambientCG, "
-        "Sketchfab), local files, or direct URLs, with integrated automatic mesh simplification "
+        "Sketchfab), AI text-to-3D generation (Meshy AI, Tripo3D -- requires MESHY_API_KEY/"
+        "TRIPO_API_KEY), local files, or direct URLs, with integrated automatic mesh simplification "
         "(form-preserving simplify_geometry, ratio decimate, voxel remesh) to hit a target vertex budget, "
         "and automatic scale/ground normalization."
     )
@@ -554,6 +733,7 @@ class SuperImportTool(ToolBase):
         raw_asset_id = params.get("asset_id", "")
         raw_url = params.get("url", "")
         raw_query = params.get("query") or params.get("search_query", "")
+        raw_prompt = params.get("prompt", "")
 
         # Unpack provider prefix if encoded as "provider:asset_id"
         if ":" in raw_asset_id and not (raw_asset_id.startswith("http:") or raw_asset_id.startswith("https:") or (len(raw_asset_id) > 1 and raw_asset_id[1] == ":")):
@@ -577,8 +757,20 @@ class SuperImportTool(ToolBase):
         credits_info = None
 
         try:
+            # AI text-to-3D generation (Meshy AI / Tripo3D) -- checked first so an
+            # explicit provider/source_type never gets misrouted by the loose
+            # heuristics (e.g. length-32 id) the other branches use to guess.
+            if source_type == "AI_GEN" or provider in ("MESHY", "TRIPO"):
+                prompt_text = raw_prompt.strip() or raw_query.strip()
+                if not prompt_text and "_prompt_" in raw_asset_id:
+                    prompt_text = raw_asset_id.split("_prompt_", 1)[-1].replace("_", " ").strip()
+                if not prompt_text:
+                    return {"success": False, "message": "'prompt' is required for AI generation"}
+
+                resolved_path, credits_info = generate_ai_model_job(provider, prompt_text)
+
             # Sketchfab
-            if provider == "SKETCHFAB" or len(raw_asset_id) == 32:
+            elif provider == "SKETCHFAB" or len(raw_asset_id) == 32:
                 asset_id = raw_asset_id
                 cache_dir = Path(tempfile.gettempdir()) / "mcp_blender_assets" / "sketchfab" / asset_id
                 resolved_path, asset_nature, _msg = _download_sketchfab_asset(asset_id, cache_dir)
@@ -599,7 +791,7 @@ class SuperImportTool(ToolBase):
                 credits_info = f"Poly Haven CC0 ('{asset_id}')"
 
             # Direct URL
-            elif source_type in ("URL", "AI_GEN") or (raw_url or raw_filepath.startswith("http") or raw_asset_id.startswith("http")):
+            elif source_type == "URL" or (raw_url or raw_filepath.startswith("http") or raw_asset_id.startswith("http")):
                 url = raw_url or raw_filepath or raw_asset_id
                 temp_dir = Path(tempfile.mkdtemp(prefix="mcp_super_import_"))
                 filename = url.split("?")[0].split("/")[-1] or "model.glb"

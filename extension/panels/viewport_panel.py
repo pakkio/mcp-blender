@@ -6,6 +6,8 @@ TOOL_REGISTRY), so there is no second implementation of either to drift out
 of sync with the MCP-facing one.
 """
 
+import threading
+
 import bpy
 
 from ..tools import TOOL_REGISTRY
@@ -1057,6 +1059,11 @@ class MCP_OT_ai_generate(bpy.types.Operator):
         default="",
     )
 
+    _thread = None
+    _job = None
+    _timer = None
+    _area = None
+
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self, width=480)
 
@@ -1084,47 +1091,88 @@ class MCP_OT_ai_generate(bpy.types.Operator):
             self.report({"ERROR"}, "Please enter a prompt for the 3D model")
             return {"CANCELLED"}
 
-        from ..tools import TOOL_REGISTRY
+        # Generation (task create + poll + download) is pure network/file I/O
+        # with no bpy calls, so it runs on a background thread instead of
+        # blocking Blender's main thread for however long Meshy/Tripo take --
+        # a blocking call here previously froze the whole UI, indistinguishable
+        # from a crash, for as long as the AI provider took to respond.
+        from ..tools.super_import_ops import generate_ai_model_job
 
-        collection = self.collection_name.strip()
-        if not collection:
-            provider_label = self.provider.capitalize()
-            collection = f"Generated/{provider_label}"
+        prompt = self.prompt.strip()
+        provider = self.provider.upper()
+        self._job = {"done": False, "error": None, "path": None, "credits": None, "status": "Starting..."}
 
-        params = {
-            "prompt": self.prompt.strip(),
-            "provider": self.provider,
-            "reduction_method": self.reduction_method,
+        def worker(job):
+            def on_status(text):
+                job["status"] = text
+
+            try:
+                path, credits = generate_ai_model_job(provider, prompt, status_cb=on_status)
+                job["path"] = path
+                job["credits"] = credits
+            except Exception as exc:
+                job["error"] = str(exc)
+            finally:
+                job["done"] = True
+
+        self._thread = threading.Thread(target=worker, args=(self._job,), daemon=True)
+        self._thread.start()
+
+        self._area = context.area
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.25, window=context.window)
+        wm.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if event.type == "ESC":
+            self._cleanup(context)
+            self.report({"WARNING"}, "AI generation cancelled (any in-flight request may still finish on the provider's side)")
+            return {"CANCELLED"}
+
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        job = self._job
+        if self._area:
+            self._area.header_text_set(f"{job['status']}  (Esc to cancel)")
+
+        if not job["done"]:
+            return {"PASS_THROUGH"}
+
+        self._cleanup(context)
+
+        if job["error"]:
+            self.report({"ERROR"}, job["error"])
+            return {"CANCELLED"}
+
+        collection = self.collection_name.strip() or f"Generated/{self.provider.capitalize()}"
+        result = TOOL_REGISTRY["super_import"].execute({
+            "source_type": "FILE",
+            "filepath": str(job["path"]),
+            "simplifier_tool": self.reduction_method.upper() if self.reduction_method != "none" else "NONE",
             "target_vertices": self.target_vertices,
-            "collection_path": collection,
-        }
+            "auto_orient": True,
+            "normalize_scale": True,
+            "target_size": 2.0,
+            "ground_to_floor": True,
+            "center_xy": True,
+            "collection_name": collection,
+        })
+        if not result.get("success"):
+            self.report({"ERROR"}, result.get("message", "Import of generated model failed"))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"{result['message']} | {job['credits']}")
+        return {"FINISHED"}
 
-        if context.window:
-            context.window.cursor_modal_set("WAIT")
-        try:
-            result = TOOL_REGISTRY["super_import"].execute({
-                "source_type": "URL",
-                "provider": self.provider,
-                "asset_id": f"{self.provider}_prompt_{self.prompt.strip().replace(' ', '_')[:30]}",
-                "filepath": "",
-                "url": "",
-                "simplifier_tool": self.reduction_method.upper() if self.reduction_method != "none" else "NONE",
-                "target_vertices": self.target_vertices,
-                "auto_orient": True,
-                "normalize_scale": True,
-                "target_size": 2.0,
-                "ground_to_floor": True,
-                "center_xy": True,
-                "collection_name": collection,
-            })
-            if not result.get("success"):
-                self.report({"ERROR"}, result.get("message", "AI generation failed"))
-                return {"CANCELLED"}
-            self.report({"INFO"}, result["message"])
-            return {"FINISHED"}
-        finally:
-            if context.window:
-                context.window.cursor_modal_restore()
+    def _cleanup(self, context):
+        wm = context.window_manager
+        if self._timer:
+            wm.event_timer_remove(self._timer)
+            self._timer = None
+        if self._area:
+            self._area.header_text_set(None)
+            self._area = None
 
 
 class VIEW3D_PT_mcp_bridge(bpy.types.Panel):

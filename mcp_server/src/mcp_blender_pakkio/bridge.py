@@ -27,6 +27,13 @@ DEFAULT_REQUEST_TIMEOUT_S = 15.0
 # Bake/render/batch/fluid-sim operations can legitimately run for minutes;
 # tool wrappers for those methods pass this explicitly to send_request().
 HEAVY_REQUEST_TIMEOUT_S = 600.0
+# websockets' 1 MiB default max_size is smaller than a single base64-encoded
+# screenshot at typical render resolutions (e.g. a plain 1920x1080 viewport
+# capture already base64-encodes to ~1.9MB) -- messages over the limit get
+# the connection forcibly closed with "message too big", which surfaces here
+# as a spurious "Connection to Blender bridge was lost". Must match the
+# max_size set on extension/bridge/server.py's websockets.serve().
+MAX_MESSAGE_SIZE_BYTES = 100 * 1024 * 1024
 MIN_RECONNECT_DELAY_S = 1.0
 MAX_RECONNECT_DELAY_S = 30.0
 RECONNECT_MULTIPLIER = 2.0
@@ -70,7 +77,20 @@ class BlenderBridge:
     async def _connect_once(self) -> None:
         self._state = ConnectionState.CONNECTING
         try:
-            self._ws = await websockets.connect(self.url, open_timeout=self._request_timeout)
+            # ping_interval=None: Blender's WS server thread shares the GIL
+            # with the main thread, which blocks synchronously for legitimate
+            # heavy bpy ops (renders, bakes, viewport screenshots). A keepalive
+            # ping can go unanswered purely from GIL starvation, not an actual
+            # dead connection -- this raised spurious "Connection to Blender
+            # bridge was lost" errors mid-operation. Per-request timeouts
+            # (DEFAULT_REQUEST_TIMEOUT_S / HEAVY_REQUEST_TIMEOUT_S) already
+            # bound how long we wait, so the ping heartbeat is redundant.
+            self._ws = await websockets.connect(
+                self.url,
+                open_timeout=self._request_timeout,
+                ping_interval=None,
+                max_size=MAX_MESSAGE_SIZE_BYTES,
+            )
         except (OSError, websockets.exceptions.WebSocketException, asyncio.TimeoutError) as exc:
             self._state = ConnectionState.DISCONNECTED
             raise BridgeError(

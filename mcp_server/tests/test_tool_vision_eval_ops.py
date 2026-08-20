@@ -40,7 +40,7 @@ async def test_multiview_happy_path(monkeypatch):
     result = await handler(question="is this good?")
 
     bridge.send_request.assert_awaited_once_with(
-        "capture_multiview_audit", {"target_object": None, "include_base64": True}
+        "capture_multiview_audit", {"target_object": None, "include_base64": True}, timeout=600.0
     )
     assert result["success"] is True
     assert result["critique"] == "looks fine"

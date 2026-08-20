@@ -83,7 +83,82 @@ class BlenderRenderPipelineParams(BaseModel):
 
 # --- Dispatch Helper ---
 
+# --- Facade parameter hygiene ---
+#
+# The facades forward `params` verbatim and the Blender-side tools read the keys
+# they know via params.get(...). A misnamed key is therefore dropped in SILENCE:
+# the call returns success while doing nothing, which is far worse than an error
+# (e.g. create_material with `color=` reported success and produced a default
+# grey material; create_lighting_rig with `target=`/`distance=` reported success
+# and built the rig at the world origin).
+#
+# _PARAM_SPECS records the accepted parameter names per bridge method, plus
+# aliases for the names callers intuitively reach for. Methods absent from this
+# table keep the previous permissive pass-through, so this is additive.
+_PARAM_SPECS: dict[str, dict[str, Any]] = {
+    "create_material": {
+        "accepted": {
+            "name", "base_color", "metallic", "roughness", "specular", "ior",
+            "transmission", "emission_color", "emission_strength", "alpha",
+            "assign_to_object",
+        },
+        "aliases": {
+            "color": "base_color",
+            "diffuse_color": "base_color",
+            "object_name": "assign_to_object",
+            "assign_to": "assign_to_object",
+            "material_name": "name",
+        },
+    },
+    "assign_material": {
+        "accepted": {"object_name", "material_name", "slot_index"},
+        "aliases": {"object": "object_name", "material": "material_name", "slot": "slot_index"},
+    },
+    "create_lighting_rig": {
+        "accepted": {
+            "rig_type", "target_object", "target_location", "distance",
+            "energy_multiplier",
+        },
+        "aliases": {"energy": "energy_multiplier", "radius": "distance"},
+    },
+}
+
+
+def _normalise_params(method: str, params: dict) -> dict:
+    """Resolve aliases and reject unknown keys for methods with a known spec."""
+    spec = _PARAM_SPECS.get(method)
+    if not spec:
+        return params
+
+    accepted: set[str] = spec["accepted"]
+    aliases: dict[str, str] = spec.get("aliases", {})
+    out: dict[str, Any] = {}
+    unknown: list[str] = []
+
+    for key, value in params.items():
+        # `target` is type-dependent: coordinates aim the rig at a point, a
+        # string names an object to track.
+        if method == "create_lighting_rig" and key == "target":
+            canonical = "target_location" if isinstance(value, (list, tuple)) else "target_object"
+        else:
+            canonical = aliases.get(key, key)
+
+        if canonical not in accepted:
+            unknown.append(key)
+            continue
+        out[canonical] = value
+
+    if unknown:
+        raise BridgeError(
+            ErrorType.VALIDATION,
+            f"Unknown parameter(s) for '{method}': {', '.join(sorted(unknown))}. "
+            f"Accepted: {', '.join(sorted(accepted))}.",
+        )
+    return out
+
+
 async def _dispatch_bridge(bridge: BlenderBridge, method: str, params: dict, timeout: Optional[float] = None) -> dict:
+    params = _normalise_params(method, params)
     result = await bridge.send_request(method, params, timeout=timeout)
     if not result.get("success"):
         raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", f"Action '{method}' failed"))
@@ -196,7 +271,15 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "Search free/CC0 3D assets (Poly Haven, ambientCG, Sketchfab) or generate text-to-3D models with AI "
             "(Meshy AI, Tripo3D, Trellis) with auto-decimation & collection sorting. Import results carry an "
             "'orientation' report; when it says the model landed on its side or upside down, retry with "
-            "params up_axis (the file's real up axis, usually 'Y') or auto_orient=true."
+            "params up_axis (the file's real up axis, usually 'Y') or auto_orient=true.\n\n"
+            "ai_generate params: prompt (required), provider ('meshy'|'tripo', default 'meshy'), "
+            "target_vertices (post-generation vertex budget, default 30000), reduction_method -- "
+            "'simplify' (default, form-preserving weld+dissolve+iterative collapse; higher quality but can run "
+            "for minutes on a dense/complex generated mesh), 'decimate' (plain ratio decimate, much faster, use "
+            "this for quick iteration or if 'simplify' is timing out), 'remesh' (voxel remesh, destroys UVs -- "
+            "avoid, generated models are textured), or 'none' (skip reduction entirely, fastest, keep the raw "
+            "generated mesh). Meshy AI results are always textured (a 'preview' untextured pass followed "
+            "automatically by a 'refine' texturing pass -- there is no untextured-only mode)."
         ),
     )
     async def blender_assets(
@@ -394,7 +477,8 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "compositor_effects": "configure_compositor_effects",
         }
         method = method_map.get(action, action)
-        return await _dispatch_bridge(bridge, method, p)
+        timeout = HEAVY_REQUEST_TIMEOUT_S if action == "screenshot" else None
+        return await _dispatch_bridge(bridge, method, p, timeout=timeout)
 
     # 8. Physics & Simulation
     @mcp.tool(

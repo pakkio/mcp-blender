@@ -1,4 +1,4 @@
-# mcp-blender-pakkio (v2.0.8)
+# mcp-blender-pakkio (v2.0.23)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender-pakkio` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.8) |
+| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.23) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **138 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -186,6 +186,69 @@ Blender is Z-up; glTF, FBX, USD, Maya/Unity/3ds Max exports and most STL files a
 - Use `decimate_mesh` only on a mesh you already know is clean (hand-modelled, or already repaired); use `simplify_geometry` on anything imported or downloaded.
 - **v2.0.4 fix**: `simplify_geometry` on a large mesh (weld + dissolve + iterative collapse solve + deviation sampling) can run past 15s, but the Blender-side bridge wasn't in its long-timeout allowlist -- it would report "Blender did not respond in time" after 15s while the tool kept running, silently dropping the eventual result. Fixed in `extension/bridge/server.py`'s `HEAVY_METHODS`, with a regression test (`test_heavy_timeout_consistency.py`) checking every mcp_server-side heavy call has a matching entry there.
 
+> **Version note**: v2.0.9 -- v2.0.12 and v2.0.20 -- v2.0.22 were never released; the
+> series jumps 2.0.8 → 2.0.13 → 2.0.19 → 2.0.23. Section headings below cite the release a
+> change actually shipped in, so those gaps are expected rather than missing entries.
+
+### 22. Paginated Asset Search (v2.0.13)
+`search_online_assets` pages through provider results instead of returning only the first batch. Cursor handling was fixed -- earlier calls passed the cursor incorrectly and silently re-returned page one -- and each result now carries a browser-openable URL so a candidate can be inspected online before importing.
+
+### 23. Semantic Renaming (v2.0.14 → v2.0.17)
+`regen_names` turns exporter-mangled object names into readable, meaningful ones. It landed incrementally:
+
+- **v2.0.14**: fixed translation of dot-suffixed and trailing-digit names (`Sedia.001`, `Tavolo2`), and expanded the Italian directional/material vocabulary.
+- **v2.0.15**: purely generic primitive names (`Cube.001`, `obj_01`, `Mesh_3`) are left alone rather than "translated" into nonsense, since they carry no semantic content to preserve.
+- **v2.0.16**: hexadecimal exporter hashes are stripped from generic names (e.g. `mesh_a3f91c` → `mesh`).
+- **v2.0.17**: renaming became **LLM-based**, with the local dictionary kept as an offline fallback when no model is reachable. This release also introduced a **unified `.env` loader** shared by every component that needs credentials.
+
+### 24. `separate_logical_areas` -- AI Mesh Segmentation (v2.0.18)
+Splits a single mesh into semantically meaningful sub-objects (a chair into seat / back / legs) using AI-driven segmentation, rather than by connected components or material boundaries.
+
+### 25. Unified `ai_generate` (v2.0.19)
+Text-to-3D generation is a single call with an explicit provider and an explicit post-generation vertex budget.
+
+| Param | Values | Notes |
+| :--- | :--- | :--- |
+| `prompt` | string | **required** |
+| `provider` | `meshy` (default), `tripo` | |
+| `target_vertices` | int, default `30000` | post-generation vertex budget |
+| `reduction_method` | `simplify` (default) | form-preserving weld + dissolve + iterative collapse; higher quality, but can run for **minutes** on a dense generated mesh |
+| | `decimate` | plain ratio decimate -- much faster; use for quick iteration, or if `simplify` is timing out |
+| | `remesh` | voxel remesh; **destroys UVs** -- avoid, generated models are textured |
+| | `none` | skip reduction entirely; fastest, keeps the raw generated mesh |
+
+**Meshy results are always textured.** Meshy has no single-call textured mode: the provider runs a fast untextured `preview` geometry pass, then automatically a slower `refine` pass that bakes PBR textures onto it. There is no untextured-only mode via `ai_generate`.
+
+Also in v2.0.19: checkpoint restore is deferred via timers so it cannot fire mid-operation, and the VLM path auto-falls-back when a model rejects an image.
+
+### 26. VLM Fallback Hardening (post-v2.0.19)
+Some vision-incompatible models answer with **HTTP 200** and an error body rather than a non-2xx status, which defeated the original fallback. `evaluate_scene_visually` now detects that case and falls back to a working model instead of surfacing a confusing success-shaped failure.
+
+### 27. In-Blender AI Generation + Progress HUD (v2.0.23)
+Generation can be driven from **inside Blender**, not only from the MCP server:
+
+- `generate_ai_model_job(provider, prompt)` in `extension/tools/super_import_ops.py` implements both providers Blender-side -- Meshy (`preview` → `refine`) and Tripo (`text_to_model`) -- each polling its task until a terminal state.
+- The viewport panel gained a **modal operator with a background worker and live status callbacks**, so a multi-minute generation reports progress in the viewport instead of blocking the UI.
+- mcp_server's Meshy provider gained a `texture: bool = True` flag on `download()`: `texture=False` skips the `refine` stage for a faster untextured result, and caches under a distinct `_untextured` id so the two variants don't collide.
+
+### 28. Facade Parameter Validation & Rig Aiming (v2.0.23)
+The domain facades used to forward `params` straight through to the Blender side, where each tool reads the keys it knows via `params.get(...)`. A misnamed key was therefore dropped **in silence**: the call returned `success` while doing nothing. Two real cases: `blender_material(action='create', params={'color': ...})` reported success and produced a default grey material, and `blender_camera_lighting(action='studio_lighting', params={'target': ..., 'distance': ...})` reported success and built the rig at the world origin.
+
+- **Unknown parameters now raise** a `validation_error` naming the offending key and listing the accepted ones, instead of being discarded. Methods without a declared spec keep the previous pass-through, so this is additive.
+- **Intuitive aliases are accepted**: `color` → `base_color`, `object_name` → `assign_to_object`, `material`/`object` → `material_name`/`object_name`, `radius` → `distance`. For `create_lighting_rig`, `target` resolves by type -- coordinates become `target_location`, a string becomes `target_object`.
+- **`create_lighting_rig` gained real aiming**: `target_location` ([x,y,z]) positions a rig around a subject that isn't on an object origin, and `distance` (metres, default 5.0) rescales the rig about the aim point while preserving its designed shape. Previously a rig built without a `target_object` got **no aiming at all** -- the lamps kept their default rotation and pointed straight down. The response now echoes the resolved `target_location`, `target_object_found` and `distance`, so a fallback to the origin is visible rather than silent.
+
+### Required credentials
+The unified `.env` loader (v2.0.17) reads these. Each is only needed for the provider you actually use:
+
+| Key | Used by |
+| :--- | :--- |
+| `MESHY_API_KEY` | `ai_generate` / import with `provider=meshy` |
+| `TRIPO_API_KEY` | `ai_generate` / import with `provider=tripo` |
+| `OPENROUTER_API_KEY` + `OPENROUTER_VISION_MODEL` | `evaluate_scene_visually`, LLM-based renaming |
+| `SKETCHFAB_API_TOKEN` | Sketchfab asset search / import |
+| `HF_TOKEN`, `TRELLIS_API_KEY` | HuggingFace-hosted generation (Trellis) |
+
 ---
 
 ## 🚀 Quickstart Installation
@@ -193,11 +256,11 @@ Blender is Z-up; glTF, FBX, USD, Maya/Unity/3ds Max exports and most STL files a
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.8.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.23.zip
 ```
 
 3. In Blender 4.2+, open **Preferences > Get Extensions > Install from Disk...**,
-   select `dist/mcp_bridge_pakkio-2.0.8.zip`, and enable **MCP Bridge Pakkio**.
+   select `dist/mcp_bridge_pakkio-2.0.23.zip`, and enable **MCP Bridge Pakkio**.
 
 ### 2. Install the MCP Server
 

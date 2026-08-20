@@ -2,7 +2,7 @@ from typing import Literal, Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
-from ..bridge import BlenderBridge
+from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..errors import BridgeError, ErrorType
 from ..vlm import VLMError, critique_image, extract_png_bytes, is_configured
 
@@ -50,12 +50,14 @@ def register_vision_eval_tools(mcp: FastMCP, bridge: BlenderBridge):
             capture = await bridge.send_request(
                 "inspect_focus_shot",
                 {"target_object": params.target_object, "include_base64": True},
+                timeout=HEAVY_REQUEST_TIMEOUT_S,
             )
             image_key = "image_base64"
         else:
             capture = await bridge.send_request(
                 "capture_multiview_audit",
                 {"target_object": params.target_object, "include_base64": True},
+                timeout=HEAVY_REQUEST_TIMEOUT_S,
             )
             image_key = "base64_data_uri"
 

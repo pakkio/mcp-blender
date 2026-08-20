@@ -37,6 +37,12 @@ REQUEST_TIMEOUT_S = 15.0
 # than an exact mirror since new-but-similarly-heavy tools default safely
 # to the short timeout if omitted here (fail fast) rather than the long one.
 HEAVY_REQUEST_TIMEOUT_S = 600.0
+# Must match MAX_MESSAGE_SIZE_BYTES in mcp_server/src/mcp_blender_pakkio/bridge.py.
+# websockets' max_size governs what each endpoint accepts as an INCOMING
+# message -- the mcp_server-side client's max_size is what actually gates a
+# large screenshot response, but this is kept in sync for symmetry against
+# any future direction where the extension is the receiver of a big payload.
+MAX_MESSAGE_SIZE_BYTES = 100 * 1024 * 1024
 HEAVY_METHODS = frozenset({
     "bake_advanced",
     "configure_light_probe",
@@ -55,6 +61,9 @@ HEAVY_METHODS = frozenset({
     "regen_element_names",
     "separate_logical_areas",
     "super_import",
+    "capture_multiview_audit",
+    "inspect_focus_shot",
+    "get_viewport_screenshot",
 })
 
 _loop: Optional[asyncio.AbstractEventLoop] = None
@@ -171,7 +180,14 @@ async def _handle_client(websocket) -> None:
 async def _serve(host: str, port: int, ready: threading.Event) -> None:
     global _server, _address, _stop_event
     _stop_event = asyncio.Event()
-    async with websockets.serve(_handle_client, host, port) as server:
+    # ping_interval=None: matches the mcp_server-side client (bridge.py) --
+    # see the comment there for why the keepalive ping is disabled rather
+    # than just widened. Heavy bpy ops on the main thread starve this
+    # server's asyncio loop of GIL time, and an unanswered ping was tearing
+    # down otherwise-healthy connections mid-operation.
+    async with websockets.serve(
+        _handle_client, host, port, ping_interval=None, max_size=MAX_MESSAGE_SIZE_BYTES
+    ) as server:
         _server = server
         sock = server.sockets[0] if server.sockets else None
         _address = sock.getsockname() if sock else (host, port)
