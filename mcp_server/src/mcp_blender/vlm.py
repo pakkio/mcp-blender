@@ -122,3 +122,51 @@ async def critique_image(question: str, png_bytes: bytes, model: str | None = No
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
     }
+
+
+async def generate_text(
+    prompt: str,
+    system_prompt: Optional[str] = None,
+    model: Optional[str] = None,
+    response_format: Optional[dict] = None,
+) -> str:
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        raise VLMError("OPENROUTER_API_KEY is not set.")
+
+    resolved_model = resolve_model(model)
+
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    payload = {
+        "model": resolved_model,
+        "messages": messages,
+    }
+    if response_format:
+        payload["response_format"] = response_format
+
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
+        try:
+            response = await client.post(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        except httpx.HTTPError as exc:
+            raise VLMError(f"OpenRouter request failed: {exc}") from exc
+
+        if response.status_code != 200:
+            raise VLMError(f"OpenRouter returned {response.status_code}: {response.text}")
+
+        try:
+            body = response.json()
+            return body["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, ValueError) as exc:
+            raise VLMError(f"Failed to parse OpenRouter response: {exc}") from exc
+

@@ -10,7 +10,9 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
-from ..docs.registry import search_docs
+from ..docs.registry import search_docs, DOMAIN_DOCS
+from ..vlm import is_configured, generate_text
+import json
 from ..errors import BridgeError, ErrorType
 from .asset_source_ops import register_asset_source_tools
 from .bridge_status_ops import register_bridge_status_tools
@@ -174,7 +176,54 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
         description="Search documentation, multi-step 3D workflow recipes (e.g. cloth sim, character hair, PBR bake), and action parameter specifications on demand.",
     )
     async def blender_docs(query: str, category: Optional[str] = None) -> dict:
-        return search_docs(query, category)
+        results = search_docs(query, category)
+        
+        is_recipe_search = category is None or category.lower() in ("all", "recipe", "recipes")
+        if is_recipe_search and is_configured():
+            try:
+                domains_summary = []
+                for tool_name, domain in DOMAIN_DOCS.items():
+                    actions_str = "\n".join([f"    - {action_name}: {action_desc}" for action_name, action_desc in domain["actions"].items()])
+                    domains_summary.append(f"Tool '{tool_name}' ({domain['description']}):\n{actions_str}")
+                domains_summary_str = "\n\n".join(domains_summary)
+
+                system_prompt = (
+                    "You are a Blender 3D automation pipeline assistant. Your task is to generate a custom multi-step recipe "
+                    "to accomplish the user's goal using ONLY the available MCP tools and actions listed in your instructions.\n\n"
+                    "Return ONLY a valid JSON object matching this schema:\n"
+                    "{\n"
+                    "  \"title\": \"Short descriptive title of the recipe\",\n"
+                    "  \"description\": \"What this recipe accomplishes\",\n"
+                    "  \"steps\": [\n"
+                    "    {\n"
+                    "      \"step\": 1,\n"
+                    "      \"tool\": \"Name of the tool (must be one of the registered tools, e.g. blender_mesh)\",\n"
+                    "      \"action\": \"Name of the action (must be one of the registered actions for this tool)\",\n"
+                    "      \"params\": { ... key-value parameters matching the action description ... }\n"
+                    "    }\n"
+                    "  ],\n"
+                    "  \"gotchas\": \"Important tips or caveats (e.g. Cycles render engine requirements, subdivision requirements).\"\n"
+                    "}\n\n"
+                    "Do not include any markdown fences or conversational prefaces/suffixes. Output only the raw JSON."
+                )
+
+                prompt = f"User Goal:\n{query}\n\nAvailable Tools & Action Specs:\n{domains_summary_str}"
+                
+                raw_json = await generate_text(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    response_format={"type": "json_object"}
+                )
+                
+                custom_recipe = json.loads(raw_json.strip())
+                if custom_recipe and "steps" in custom_recipe:
+                    custom_recipe["recipe_key"] = f"custom_llm_{query.replace(' ', '_').lower()[:30]}"
+                    results["matched_recipes"].insert(0, custom_recipe)
+                    results["custom_llm_recipe"] = custom_recipe
+            except Exception as e:
+                results["custom_llm_recipe_error"] = str(e)
+
+        return results
 
     # 2. Mesh Modeling & Geometry
     @mcp.tool(

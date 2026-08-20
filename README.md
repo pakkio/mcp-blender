@@ -1,4 +1,4 @@
-# mcp-blender (v2.0.25)
+# mcp-blender (v2.0.26)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender` (v2.0.25) |
+| Capability | Generic Blender MCPs | `mcp-blender` (v2.0.26) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **138 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -238,6 +238,12 @@ The domain facades used to forward `params` straight through to the Blender side
 - **Intuitive aliases are accepted**: `color` → `base_color`, `object_name` → `assign_to_object`, `material`/`object` → `material_name`/`object_name`, `radius` → `distance`. For `create_lighting_rig`, `target` resolves by type -- coordinates become `target_location`, a string becomes `target_object`.
 - **`create_lighting_rig` gained real aiming**: `target_location` ([x,y,z]) positions a rig around a subject that isn't on an object origin, and `distance` (metres, default 5.0) rescales the rig about the aim point while preserving its designed shape. Previously a rig built without a `target_object` got **no aiming at all** -- the lamps kept their default rotation and pointed straight down. The response now echoes the resolved `target_location`, `target_object_found` and `distance`, so a fallback to the origin is visible rather than silent.
 
+### 29. LLM-Powered Custom Workflow Recipes (v2.0.26)
+Earlier versions of `blender_docs` only searched a static dictionary of hardcoded workflow recipes. 
+
+- **Custom AI Recipes**: If an `OPENROUTER_API_KEY` is configured in your `.env`, `blender_docs` now automatically calls OpenRouter/Gemini to generate a customized, step-by-step 3D workflow recipe tailored exactly to your query.
+- **Accurate Action Schemas**: The system compiles the complete action descriptions, tool names, and parameter specifications for all 10 domain facades and feeds them to the LLM, ensuring the generated steps use valid tools and parameters.
+
 ### Required credentials
 The unified `.env` loader (v2.0.17) reads these. Each is only needed for the provider you actually use:
 
@@ -256,11 +262,11 @@ The unified `.env` loader (v2.0.17) reads these. Each is only needed for the pro
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge-2.0.25.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge-2.0.26.zip
 ```
 
 3. In Blender 4.2+, open **Preferences > Get Extensions > Install from Disk...**,
-   select `dist/mcp_bridge-2.0.25.zip`, and enable **MCP Bridge**.
+   select `dist/mcp_bridge-2.0.26.zip`, and enable **MCP Bridge**.
 
 ### 2. Install the MCP Server
 
