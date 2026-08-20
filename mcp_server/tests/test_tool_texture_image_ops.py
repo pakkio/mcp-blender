@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.tools.texture_image_ops import register_texture_image_tools
+from mcp_blender.tools.texture_image_ops import register_texture_image_tools
 
 
 @pytest.mark.asyncio

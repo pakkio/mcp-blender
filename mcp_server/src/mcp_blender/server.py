@@ -15,7 +15,7 @@ from .tools import register_all_tools
 
 logger = logging.getLogger(__name__)
 
-SERVER_INSTRUCTIONS = """Bridges MCP clients to a running Blender instance via the mcp-blender-pakkio extension.
+SERVER_INSTRUCTIONS = """Bridges MCP clients to a running Blender instance via the mcp-blender extension.
 
 Unified Domain Controllers:
 - blender_docs: Query multi-step 3D workflow recipes, parameters, and best practices.
@@ -40,7 +40,7 @@ def build_server() -> tuple[FastMCP, BlenderBridge]:
     host, port = resolve_host_port()
     bridge = BlenderBridge(host, port)
     mcp = FastMCP(
-        name="mcp-blender-pakkio",
+        name="mcp-blender",
         instructions=SERVER_INSTRUCTIONS,
     )
     register_all_tools(mcp, bridge)
@@ -56,7 +56,7 @@ async def run() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "Could not connect to Blender bridge yet (%s) -- will keep retrying in the "
-            "background until the mcp_bridge_pakkio extension is running in Blender.",
+            "background until the mcp_bridge extension is running in Blender.",
             exc,
         )
         asyncio.create_task(bridge.reconnect_with_backoff())

@@ -10,7 +10,7 @@
     "mcp-blender": {
       "type": "local",
       "enabled": true,
-      "command": ["mcp_server/.venv/Scripts/mcp-blender-pakkio.exe"],
+      "command": ["mcp_server/.venv/Scripts/mcp-blender.exe"],
       "environment": {}
     }
   }

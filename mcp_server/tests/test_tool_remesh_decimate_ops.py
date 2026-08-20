@@ -2,8 +2,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.bridge import HEAVY_REQUEST_TIMEOUT_S
-from mcp_blender_pakkio.tools.remesh_decimate_ops import register_remesh_decimate_tools
+from mcp_blender.bridge import HEAVY_REQUEST_TIMEOUT_S
+from mcp_blender.tools.remesh_decimate_ops import register_remesh_decimate_tools
 
 
 @pytest.mark.asyncio

@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.assets.providers.base import AssetHit, DownloadedAsset, ProviderError
-from mcp_blender_pakkio.errors import BridgeError
-from mcp_blender_pakkio.tools.asset_source_ops import register_asset_source_tools
+from mcp_blender.assets.providers.base import AssetHit, DownloadedAsset, ProviderError
+from mcp_blender.errors import BridgeError
+from mcp_blender.tools.asset_source_ops import register_asset_source_tools
 
 
 class _FakeProvider:
@@ -34,7 +34,7 @@ async def test_search_online_assets_merges_and_filters_token_required(monkeypatc
     hit_locked = AssetHit(id="chair2", provider="sketchfab", name="Chair 2", asset_type="MODEL", license="CC-BY", requires_token=True)
 
     providers = [_FakeProvider("polyhaven", hits=[hit_free]), _FakeProvider("sketchfab", hits=[hit_locked])]
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.all_providers", lambda: providers)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.all_providers", lambda: providers)
 
     bridge = AsyncMock()
     search_fn, _import_fn = register_asset_source_tools(FakeMCP(), bridge)
@@ -58,7 +58,7 @@ async def test_search_online_assets_provider_error_is_isolated(monkeypatch):
             raise ProviderError("polyhaven is down")
 
     providers = [_BrokenProvider("polyhaven"), _FakeProvider("ambientcg", hits=[])]
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.all_providers", lambda: providers)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.all_providers", lambda: providers)
 
     bridge = AsyncMock()
     search_fn, _import_fn = register_asset_source_tools(FakeMCP(), bridge)
@@ -79,8 +79,8 @@ async def test_import_online_asset_happy_path_uses_simplify_geometry(monkeypatch
     (tmp_path / "chair.glb").write_bytes(b"glb-bytes")
     provider = _FakeProvider("polyhaven", download_result=downloaded)
 
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.get_provider", lambda name: provider)
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
 
     bridge = AsyncMock()
 
@@ -122,8 +122,8 @@ async def test_import_online_asset_pushes_client_status_with_provider_target_and
     (tmp_path / "chair.glb").write_bytes(b"glb-bytes")
     provider = _FakeProvider("polyhaven", download_result=downloaded)
 
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.get_provider", lambda name: provider)
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
 
     bridge = AsyncMock()
 
@@ -202,8 +202,8 @@ def _setup_provider(monkeypatch, tmp_path, asset_id="chair1"):
     )
     (tmp_path / f"{asset_id}.glb").write_bytes(b"glb-bytes")
     provider = _FakeProvider("polyhaven", download_result=downloaded)
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.get_provider", lambda name: provider)
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
 
 
 @pytest.mark.asyncio
@@ -291,8 +291,8 @@ async def test_import_online_asset_falls_back_to_decimate_when_simplify_gate_fai
     (tmp_path / "fork.glb").write_bytes(b"glb-bytes")
     provider = _FakeProvider("polyhaven", download_result=downloaded)
 
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.get_provider", lambda name: provider)
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
 
     bridge = AsyncMock()
     seen_methods = []
@@ -330,8 +330,8 @@ async def test_import_online_asset_falls_back_to_decimate_when_simplify_gate_fai
 async def test_import_online_asset_download_error_returns_failure(monkeypatch, tmp_path):
     provider = _FakeProvider("sketchfab", download_error=ProviderError("SKETCHFAB_API_TOKEN missing"))
 
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.get_provider", lambda name: provider)
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
 
     bridge = AsyncMock()
     _search_fn, import_fn = register_asset_source_tools(FakeMCP(), bridge)
@@ -369,8 +369,8 @@ async def test_import_online_asset_always_organizes_hierarchy(monkeypatch, tmp_p
     (tmp_path / "character.glb").write_bytes(b"glb-bytes")
     provider = _FakeProvider("polyhaven", download_result=downloaded)
 
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.get_provider", lambda name: provider)
-    monkeypatch.setattr("mcp_blender_pakkio.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
 
     recorded_calls = []
     bridge = AsyncMock()

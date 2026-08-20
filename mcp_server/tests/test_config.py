@@ -1,6 +1,6 @@
 import json
 
-from mcp_blender_pakkio.config import (
+from mcp_blender.config import (
     DEFAULT_HOST,
     DEFAULT_PORT,
     ENV_HOST,
@@ -12,7 +12,7 @@ from mcp_blender_pakkio.config import (
 
 def test_settings_path_is_under_home(tmp_path):
     path = settings_path(home=tmp_path)
-    assert path == tmp_path / ".mcp_blender_pakkio" / "settings.json"
+    assert path == tmp_path / ".mcp-blender" / "settings.json"
 
 
 def test_default_when_nothing_present(tmp_path, monkeypatch):

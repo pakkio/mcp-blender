@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.tools.set_object_properties import register_set_object_properties_tool
+from mcp_blender.tools.set_object_properties import register_set_object_properties_tool
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.tools.studio_lighting_ops import register_studio_lighting_tools
+from mcp_blender.tools.studio_lighting_ops import register_studio_lighting_tools
 
 
 @pytest.mark.asyncio

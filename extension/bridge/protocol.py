@@ -6,7 +6,7 @@ Error:    {"id": "...", "error": {"type": "...", "message": "...", "details": ..
 
 Kept deliberately small and dependency-free: a flat method-name-keyed RPC,
 no JSON-RPC version field, no batching. See ../../mcp_server/src/
-mcp_blender_pakkio/errors.py for the client-side mirror of ERROR_TYPES.
+mcp_blender/errors.py for the client-side mirror of ERROR_TYPES.
 """
 
 VALIDATION_ERROR = "validation_error"

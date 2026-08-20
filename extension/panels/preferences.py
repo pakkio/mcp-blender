@@ -33,7 +33,7 @@ def status_text_and_icon() -> tuple[str, str]:
     independently-maintained copies of the same logic."""
     version = _addon_version_string()
     if not is_running():
-        return f"MCP Bridge Pakkio v{version} — Stopped", "X"
+        return f"MCP Bridge v{version} — Stopped", "X"
 
     status = dispatch.get_status()
     # An actual bpy call in flight is the more concrete fact when both are
@@ -46,11 +46,11 @@ def status_text_and_icon() -> tuple[str, str]:
         return f"MCP v{version} — {client['text']} ({client['running_for_s']}s)", "SORTTIME"
 
     address = current_address()
-    return f"MCP Bridge Pakkio v{version} — waiting on port {address[1]}", "CHECKMARK"
+    return f"MCP Bridge v{version} — waiting on port {address[1]}", "CHECKMARK"
 
 
 class MCP_OT_start_server(bpy.types.Operator):
-    bl_idname = "mcp_bridge_pakkio.start_server"
+    bl_idname = "mcp_bridge.start_server"
     bl_label = "Start MCP Bridge"
 
     def execute(self, context):
@@ -63,7 +63,7 @@ class MCP_OT_start_server(bpy.types.Operator):
 
 
 class MCP_OT_stop_server(bpy.types.Operator):
-    bl_idname = "mcp_bridge_pakkio.stop_server"
+    bl_idname = "mcp_bridge.stop_server"
     bl_label = "Stop MCP Bridge"
 
     def execute(self, context):

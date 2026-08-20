@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.errors import BridgeError
-from mcp_blender_pakkio.tools.localization_ops import register_localization_tools
+from mcp_blender.errors import BridgeError
+from mcp_blender.tools.localization_ops import register_localization_tools
 
 _STRUCTURAL_TREE = {
     "old_name": "Scene Collection",
@@ -116,7 +116,7 @@ async def test_regen_names_vision_pass_renames_mesh_leaf_with_semantic_prompt(mo
         assert png_bytes == raw
         return {"critique": "  Sedile.  ", "model": "m", "prompt_tokens": 1, "completion_tokens": 1}
 
-    monkeypatch.setattr("mcp_blender_pakkio.tools.localization_ops.critique_image", fake_critique)
+    monkeypatch.setattr("mcp_blender.tools.localization_ops.critique_image", fake_critique)
 
     result = await handler(use_vision=True)
 
@@ -146,7 +146,7 @@ async def test_regen_names_vision_pass_skips_object_on_capture_failure(monkeypat
     async def fake_critique(question, png_bytes, model=None):
         raise AssertionError("must not be called when capture fails")
 
-    monkeypatch.setattr("mcp_blender_pakkio.tools.localization_ops.critique_image", fake_critique)
+    monkeypatch.setattr("mcp_blender.tools.localization_ops.critique_image", fake_critique)
 
     result = await handler(use_vision=True)
 
@@ -184,7 +184,7 @@ async def test_regen_names_respects_max_vision_renames_cap(monkeypatch):
     async def fake_critique(question, png_bytes, model=None):
         return {"critique": "Parte", "model": "m", "prompt_tokens": 1, "completion_tokens": 1}
 
-    monkeypatch.setattr("mcp_blender_pakkio.tools.localization_ops.critique_image", fake_critique)
+    monkeypatch.setattr("mcp_blender.tools.localization_ops.critique_image", fake_critique)
 
     result = await handler(use_vision=True, max_vision_renames=2)
 

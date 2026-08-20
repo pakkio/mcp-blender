@@ -9,8 +9,8 @@ both the alias resolution and the loud rejection of genuinely unknown keys.
 
 import pytest
 
-from mcp_blender_pakkio.errors import BridgeError, ErrorType
-from mcp_blender_pakkio.tools.domain_facades import _normalise_params
+from mcp_blender.errors import BridgeError, ErrorType
+from mcp_blender.tools.domain_facades import _normalise_params
 
 
 def test_unspecced_method_passes_through_unchanged():

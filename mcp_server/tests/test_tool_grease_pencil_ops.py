@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.tools.grease_pencil_ops import register_grease_pencil_tools
+from mcp_blender.tools.grease_pencil_ops import register_grease_pencil_tools
 
 
 @pytest.mark.asyncio

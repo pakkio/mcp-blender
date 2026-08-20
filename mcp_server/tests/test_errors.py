@@ -1,4 +1,4 @@
-from mcp_blender_pakkio.errors import BridgeError, ErrorType
+from mcp_blender.errors import BridgeError, ErrorType
 
 
 def test_error_type_values_match_wire_strings():

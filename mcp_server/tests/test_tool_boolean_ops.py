@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.tools.boolean_ops import register_boolean_tools
+from mcp_blender.tools.boolean_ops import register_boolean_tools
 
 
 @pytest.mark.asyncio

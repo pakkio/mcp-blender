@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.tools.shape_key_ops import register_shape_key_tools
+from mcp_blender.tools.shape_key_ops import register_shape_key_tools
 
 
 @pytest.mark.asyncio

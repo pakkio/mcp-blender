@@ -1,10 +1,10 @@
-from mcp_blender_pakkio.assets.cache import cache_dir, find_cached_file
+from mcp_blender.assets.cache import cache_dir, find_cached_file
 
 
 def test_cache_dir_creates_nested_path(tmp_path):
     path = cache_dir("polyhaven", "victorian_chair", home=tmp_path)
     assert path.exists()
-    assert path == tmp_path / ".mcp_blender_pakkio" / "assets" / "polyhaven" / "victorian_chair"
+    assert path == tmp_path / ".mcp-blender" / "assets" / "polyhaven" / "victorian_chair"
 
 
 def test_cache_dir_sanitizes_asset_id(tmp_path):

@@ -42,9 +42,9 @@ def _load_env_file(path: Path) -> None:
 
 
 def load_dotenv(home: Path | None = None) -> None:
-    """Load .env from cwd, then ~/.mcp_blender_pakkio/.env (cwd wins on conflicts)."""
+    """Load .env from cwd, then ~/.mcp-blender/.env (cwd wins on conflicts)."""
     home = home or Path.home()
-    for candidate in (Path.cwd() / ".env", home / ".mcp_blender_pakkio" / ".env"):
+    for candidate in (Path.cwd() / ".env", home / ".mcp-blender" / ".env"):
         if candidate.exists():
             _load_env_file(candidate)
 
@@ -52,7 +52,7 @@ def load_dotenv(home: Path | None = None) -> None:
 def settings_path(home: Path | None = None) -> Path:
     """Must match extension/config.py's settings_path() exactly."""
     home = home or Path.home()
-    return home / ".mcp_blender_pakkio" / "settings.json"
+    return home / ".mcp-blender" / "settings.json"
 
 
 def resolve_host_port(home: Path | None = None) -> tuple[str, int]:

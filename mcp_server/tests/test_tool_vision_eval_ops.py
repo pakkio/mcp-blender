@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.errors import BridgeError
-from mcp_blender_pakkio.tools.vision_eval_ops import register_vision_eval_tools
+from mcp_blender.errors import BridgeError
+from mcp_blender.tools.vision_eval_ops import register_vision_eval_tools
 
 
 @pytest.mark.asyncio
@@ -35,7 +35,7 @@ async def test_multiview_happy_path(monkeypatch):
         assert png_bytes == raw
         return {"critique": "looks fine", "model": "m", "prompt_tokens": 1, "completion_tokens": 2}
 
-    monkeypatch.setattr("mcp_blender_pakkio.tools.vision_eval_ops.critique_image", fake_critique)
+    monkeypatch.setattr("mcp_blender.tools.vision_eval_ops.critique_image", fake_critique)
 
     result = await handler(question="is this good?")
 

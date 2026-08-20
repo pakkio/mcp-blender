@@ -15,7 +15,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = REPO_ROOT / "extension" / "blender_manifest.toml"
 PYPROJECT = REPO_ROOT / "mcp_server" / "pyproject.toml"
-PACKAGE_INIT = REPO_ROOT / "mcp_server" / "src" / "mcp_blender_pakkio" / "__init__.py"
+PACKAGE_INIT = REPO_ROOT / "mcp_server" / "src" / "mcp_blender" / "__init__.py"
 
 _VERSION_RE = re.compile(r'^\s*version\s*=\s*["\']([^"\']+)["\']', re.MULTILINE)
 _DUNDER_VERSION_RE = re.compile(r'^\s*__version__\s*=\s*["\']([^"\']+)["\']', re.MULTILINE)
@@ -41,7 +41,7 @@ def test_extension_and_server_versions_match():
 
 
 def test_package_dunder_version_matches():
-    """`__version__` is what `import mcp_blender_pakkio` reports at runtime.
+    """`__version__` is what `import mcp_blender` reports at runtime.
 
     It sat at 2.0.8 while the project shipped through 2.0.23 -- nothing compared
     it against anything, so it drifted 15 releases without notice.
@@ -73,7 +73,7 @@ def test_readme_quotes_the_current_version():
     assert f"(v{version})" in text, (
         f"README title/table does not mention current version v{version}"
     )
-    assert f"mcp_bridge_pakkio-{version}.zip" in text, (
+    assert f"mcp_bridge-{version}.zip" in text, (
         f"README install instructions do not reference "
-        f"mcp_bridge_pakkio-{version}.zip, the artifact the build actually emits"
+        f"mcp_bridge-{version}.zip, the artifact the build actually emits"
     )

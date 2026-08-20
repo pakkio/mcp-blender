@@ -1,12 +1,12 @@
 schema_version = "1.0.0"
 
-id = "mcp_bridge_pakkio"
-version = "2.0.24"
-name = "MCP Bridge Pakkio"
+id = "mcp_bridge"
+version = "2.0.25"
+name = "MCP Bridge"
 tagline = "WebSocket bridge exposing Blender to MCP clients like Claude"
 maintainer = "Claudio Pacchiega <claudio.pacchiega@gmail.com>"
 type = "add-on"
-website = "https://github.com/claudiopacchiega/mcp-blender-pakkio"
+website = "https://github.com/claudiopacchiega/mcp-blender"
 tags = ["Development", "Pipeline", "3D View"]
 blender_version_min = "4.2.0"
 license = ["SPDX:MIT"]

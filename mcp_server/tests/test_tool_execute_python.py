@@ -4,8 +4,8 @@ import pytest
 from pydantic import ValidationError
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.errors import BridgeError, ErrorType
-from mcp_blender_pakkio.tools.execute_python import register_execute_blender_python_tool
+from mcp_blender.errors import BridgeError, ErrorType
+from mcp_blender.tools.execute_python import register_execute_blender_python_tool
 
 
 @pytest.mark.asyncio

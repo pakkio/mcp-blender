@@ -4,8 +4,8 @@ import pytest
 
 from conftest import FakeMCP
 from mcp.server.fastmcp import Image
-from mcp_blender_pakkio.bridge import HEAVY_REQUEST_TIMEOUT_S
-from mcp_blender_pakkio.tools.render_ops import register_render_tools
+from mcp_blender.bridge import HEAVY_REQUEST_TIMEOUT_S
+from mcp_blender.tools.render_ops import register_render_tools
 
 
 @pytest.mark.asyncio

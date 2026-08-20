@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from mcp_blender_pakkio.vlm import VLMError, critique_image, is_configured, resolve_model
+from mcp_blender.vlm import VLMError, critique_image, is_configured, resolve_model
 
 
 def test_is_configured_false_without_key(monkeypatch):

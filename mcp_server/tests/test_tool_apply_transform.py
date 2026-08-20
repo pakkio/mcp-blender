@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.tools.apply_transform import register_apply_transform_tool
+from mcp_blender.tools.apply_transform import register_apply_transform_tool
 
 
 @pytest.mark.asyncio

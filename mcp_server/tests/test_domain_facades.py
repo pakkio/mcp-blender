@@ -2,11 +2,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.bridge import HEAVY_REQUEST_TIMEOUT_S
-from mcp_blender_pakkio.config import resolve_tool_mode
-from mcp_blender_pakkio.docs.registry import get_recipe, list_domains_summary, search_docs
-from mcp_blender_pakkio.tools import register_all_tools
-from mcp_blender_pakkio.tools.domain_facades import register_domain_facades
+from mcp_blender.bridge import HEAVY_REQUEST_TIMEOUT_S
+from mcp_blender.config import resolve_tool_mode
+from mcp_blender.docs.registry import get_recipe, list_domains_summary, search_docs
+from mcp_blender.tools import register_all_tools
+from mcp_blender.tools.domain_facades import register_domain_facades
 
 
 def test_docs_registry_search_and_recipes():

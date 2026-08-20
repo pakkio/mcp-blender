@@ -31,13 +31,13 @@ logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_S = 15.0
 # Must stay >= the mcp_server-side HEAVY_REQUEST_TIMEOUT_S (mcp_server/src/
-# mcp_blender_pakkio/bridge.py) -- otherwise this side gives up and reports
+# mcp_blender/bridge.py) -- otherwise this side gives up and reports
 # a timeout to the client before the mcp_server-side wait would have, even
 # though Blender is still working. Kept as a superset of tool names rather
 # than an exact mirror since new-but-similarly-heavy tools default safely
 # to the short timeout if omitted here (fail fast) rather than the long one.
 HEAVY_REQUEST_TIMEOUT_S = 600.0
-# Must match MAX_MESSAGE_SIZE_BYTES in mcp_server/src/mcp_blender_pakkio/bridge.py.
+# Must match MAX_MESSAGE_SIZE_BYTES in mcp_server/src/mcp_blender/bridge.py.
 # websockets' max_size governs what each endpoint accepts as an INCOMING
 # message -- the mcp_server-side client's max_size is what actually gates a
 # large screenshot response, but this is kept in sync for symmetry against
@@ -219,7 +219,7 @@ def start_server(host: str = None, port: int = None) -> tuple:
 
     ready = threading.Event()
     _thread = threading.Thread(
-        target=_run_loop, args=(host, port, ready), daemon=True, name="mcp-blender-pakkio-ws"
+        target=_run_loop, args=(host, port, ready), daemon=True, name="mcp-blender-ws"
     )
     _thread.start()
     ready.wait(timeout=5.0)

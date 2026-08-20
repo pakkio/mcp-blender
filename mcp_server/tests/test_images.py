@@ -2,7 +2,7 @@ import base64
 
 from mcp.server.fastmcp import Image
 
-from mcp_blender_pakkio.images import image_result
+from mcp_blender.images import image_result
 
 
 def test_passthrough_when_key_missing():

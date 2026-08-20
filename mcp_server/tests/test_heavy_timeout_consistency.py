@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 
 _SERVER_PATH = Path(__file__).resolve().parents[2] / "extension" / "bridge" / "server.py"
-_TOOLS_DIR = Path(__file__).resolve().parents[1] / "src" / "mcp_blender_pakkio" / "tools"
+_TOOLS_DIR = Path(__file__).resolve().parents[1] / "src" / "mcp_blender" / "tools"
 
 
 def _extension_heavy_methods():

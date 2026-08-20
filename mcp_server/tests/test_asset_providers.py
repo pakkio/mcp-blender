@@ -3,10 +3,10 @@ import json
 import httpx
 import pytest
 
-from mcp_blender_pakkio.assets.providers.ambientcg import AmbientCGProvider
-from mcp_blender_pakkio.assets.providers.base import ProviderError
-from mcp_blender_pakkio.assets.providers.polyhaven import PolyHavenProvider
-from mcp_blender_pakkio.assets.providers.sketchfab import SketchfabProvider
+from mcp_blender.assets.providers.ambientcg import AmbientCGProvider
+from mcp_blender.assets.providers.base import ProviderError
+from mcp_blender.assets.providers.polyhaven import PolyHavenProvider
+from mcp_blender.assets.providers.sketchfab import SketchfabProvider
 
 
 def _mock_transport(handler):
@@ -19,7 +19,7 @@ async def _return_val(value):
 
 @pytest.fixture(autouse=True)
 def _reset_waf_cache(monkeypatch):
-    monkeypatch.setattr("mcp_blender_pakkio.assets.providers.sketchfab._PAGE", None)
+    monkeypatch.setattr("mcp_blender.assets.providers.sketchfab._PAGE", None)
 
 
 @pytest.mark.asyncio
@@ -86,7 +86,7 @@ async def test_polyhaven_download_fetches_include_files(monkeypatch, tmp_path):
     those too, or Blender's importer can't resolve the mesh's dependencies.
     """
     monkeypatch.setattr(
-        "mcp_blender_pakkio.assets.providers.polyhaven.find_cached_file", lambda *a, **k: None
+        "mcp_blender.assets.providers.polyhaven.find_cached_file", lambda *a, **k: None
     )
 
     files_payload = {
@@ -150,7 +150,7 @@ async def test_ambientcg_download_follows_redirects(monkeypatch, tmp_path):
     with follow_redirects=True or every download fails as a false non-200.
     """
     monkeypatch.setattr(
-        "mcp_blender_pakkio.assets.providers.ambientcg.find_cached_file", lambda *a, **k: None
+        "mcp_blender.assets.providers.ambientcg.find_cached_file", lambda *a, **k: None
     )
 
     captured_kwargs = {}
@@ -216,7 +216,7 @@ async def test_sketchfab_search_falls_back_to_browser_on_challenge(monkeypatch):
 
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
     monkeypatch.setattr(
-        "mcp_blender_pakkio.assets.providers.sketchfab._browser_fetch_json",
+        "mcp_blender.assets.providers.sketchfab._browser_fetch_json",
         lambda url, headers=None: _return_val((200, json.dumps(browser_hits))),
     )
 
@@ -239,7 +239,7 @@ async def test_sketchfab_search_waf_fails_fast_when_no_browser(monkeypatch):
 
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
     monkeypatch.setattr(
-        "mcp_blender_pakkio.assets.providers.sketchfab._browser_fetch_json",
+        "mcp_blender.assets.providers.sketchfab._browser_fetch_json",
         lambda url, headers=None: _return_val(None),
     )
 

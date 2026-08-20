@@ -29,7 +29,7 @@ def settings_path() -> Path:
     Path.home()-based path keeps both sides' config.py computing the exact
     same location with zero Blender-version coupling.
     """
-    return Path.home() / ".mcp_blender_pakkio" / "settings.json"
+    return Path.home() / ".mcp-blender" / "settings.json"
 
 
 def resolved_host() -> str:
@@ -50,10 +50,8 @@ def write_settings(host: str, port: int) -> None:
 def load_env_vars() -> None:
     """Load keys from .env files into os.environ if not already present."""
     candidates = [
-        Path.home() / ".mcp_blender_pakkio" / ".env",
+        Path.home() / ".mcp-blender" / ".env",
         Path.home() / ".env",
-        Path.home() / "w" / "mcp-blender" / ".env",
-        Path.home() / "w" / "mcp-blender-pakkio" / ".env",
         Path.cwd() / ".env",
         Path(__file__).resolve().parent.parent / ".env",
     ]

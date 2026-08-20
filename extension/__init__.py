@@ -1,5 +1,5 @@
-"""MCP Bridge Pakkio -- exposes Blender to MCP clients (e.g. Claude) over a
-localhost WebSocket, driven by a companion `mcp-blender-pakkio` MCP stdio
+"""MCP Bridge -- exposes Blender to MCP clients (e.g. Claude) over a
+localhost WebSocket, driven by a companion `mcp-blender` MCP stdio
 server process (see ../mcp_server).
 
 register()/unregister() are Blender's addon lifecycle hooks, called on
@@ -9,14 +9,14 @@ is the entire lifecycle surface that matters.
 """
 
 bl_info = {
-    "name": "MCP Bridge Pakkio",
+    "name": "MCP Bridge",
     "author": "Claudio Pacchiega",
-    "version": (2, 0, 22),
+    "version": (2, 0, 25),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > MCP Bridge",
     "description": "WebSocket bridge exposing Blender to MCP clients like Claude",
     "warning": "",
-    "doc_url": "https://github.com/claudiopacchiega/mcp-blender-pakkio",
+    "doc_url": "https://github.com/claudiopacchiega/mcp-blender",
     "category": "Development",
 }
 

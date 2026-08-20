@@ -3,7 +3,7 @@ import pytest
 from pydantic import ValidationError
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.tools.mesh_operation import register_mesh_operation_tool
+from mcp_blender.tools.mesh_operation import register_mesh_operation_tool
 
 
 @pytest.mark.asyncio

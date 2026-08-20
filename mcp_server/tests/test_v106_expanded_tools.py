@@ -2,14 +2,14 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.assets.registry import get_provider, all_providers
-from mcp_blender_pakkio.tools.checkpoint_ops import register_checkpoint_tools
-from mcp_blender_pakkio.tools.batch_execution_ops import register_batch_execution_tools
-from mcp_blender_pakkio.tools.job_ops import register_job_tools
-from mcp_blender_pakkio.tools.rigging_ops import register_rigging_tools
-from mcp_blender_pakkio.tools.hair_curves_ops import register_hair_curves_tools
-from mcp_blender_pakkio.tools.grease_pencil_ops import register_grease_pencil_tools
-from mcp_blender_pakkio.tools.vfx_tracking_ops import register_vfx_tracking_tools
+from mcp_blender.assets.registry import get_provider, all_providers
+from mcp_blender.tools.checkpoint_ops import register_checkpoint_tools
+from mcp_blender.tools.batch_execution_ops import register_batch_execution_tools
+from mcp_blender.tools.job_ops import register_job_tools
+from mcp_blender.tools.rigging_ops import register_rigging_tools
+from mcp_blender.tools.hair_curves_ops import register_hair_curves_tools
+from mcp_blender.tools.grease_pencil_ops import register_grease_pencil_tools
+from mcp_blender.tools.vfx_tracking_ops import register_vfx_tracking_tools
 
 
 @pytest.mark.asyncio

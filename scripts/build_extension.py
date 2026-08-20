@@ -86,7 +86,7 @@ def build_with_blender(blender_bin: str, output_dir: Path) -> Path | None:
         return None
 
     version = get_extension_version()
-    zip_path = output_dir / f"mcp_bridge_pakkio-{version}.zip"
+    zip_path = output_dir / f"mcp_bridge-{version}.zip"
     return zip_path if zip_path.is_file() else None
 
 
@@ -94,7 +94,7 @@ def build_with_python(output_dir: Path) -> Path:
     print("Building extension package using Python zipfile fallback...")
     output_dir.mkdir(parents=True, exist_ok=True)
     version = get_extension_version()
-    zip_path = output_dir / f"mcp_bridge_pakkio-{version}.zip"
+    zip_path = output_dir / f"mcp_bridge-{version}.zip"
 
     ignore_patterns = {
         "__pycache__",
@@ -151,7 +151,7 @@ def main() -> None:
     print("  2. Edit > Preferences > Get Extensions (or Add-ons)")
     print("  3. Click top-right dropdown arrow > 'Install from Disk...'")
     print(f"  4. Select: {zip_path.name}")
-    print("  5. Enable 'MCP Bridge Pakkio'")
+    print("  5. Enable 'MCP Bridge'")
 
 
 if __name__ == "__main__":

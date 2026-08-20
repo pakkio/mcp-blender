@@ -1,4 +1,4 @@
-# mcp-blender-pakkio (v2.0.24)
+# mcp-blender (v2.0.25)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -16,13 +16,13 @@ MCP client (Claude / Gemini / GPT-4) <--stdio--> mcp_server (pip package) <--Web
 
 ---
 
-## 🌟 Why `mcp-blender-pakkio` is Fundamentally Different & Superior
+## 🌟 Why `mcp-blender` is Fundamentally Different & Superior
 
 Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, `ahujasid/blender-mcp`) are typically minimal proofs-of-concept providing only 5 to 15 basic tools and rely heavily on raw `exec(python_code)` strings. 
 
-`mcp-blender-pakkio` was engineered from the ground up as a **complete 3D production pipeline suite**:
+`mcp-blender` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender-pakkio` (v2.0.24) |
+| Capability | Generic Blender MCPs | `mcp-blender` (v2.0.25) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **138 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -44,7 +44,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 ## ⚡ Low-Context Unified Domain Controllers (`MCP_BLENDER_TOOL_MODE=AGGREGATED`)
 
-By default, `mcp-blender-pakkio` exposes **10 unified domain facade tools** that cut LLM context consumption by **90%** while retaining 100% of underlying pipeline features:
+By default, `mcp-blender` exposes **10 unified domain facade tools** that cut LLM context consumption by **90%** while retaining 100% of underlying pipeline features:
 
 1. **`blender_docs`**: Query multi-step 3D workflow recipes (e.g. cloth sim, character rigging & hair, PBR baking, game engine export), parameters, and best practices on demand.
 2. **`blender_mesh`**: 3D modeling, transforms, boolean CSG, decimation (<10k poly budget), voxel remesh, UV unwrap, and modifiers.
@@ -256,11 +256,11 @@ The unified `.env` loader (v2.0.17) reads these. Each is only needed for the pro
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge_pakkio-2.0.24.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge-2.0.25.zip
 ```
 
 3. In Blender 4.2+, open **Preferences > Get Extensions > Install from Disk...**,
-   select `dist/mcp_bridge_pakkio-2.0.24.zip`, and enable **MCP Bridge Pakkio**.
+   select `dist/mcp_bridge-2.0.25.zip`, and enable **MCP Bridge**.
 
 ### 2. Install the MCP Server
 
@@ -271,7 +271,12 @@ pip install -e .
 
 ### 3. (Optional) Configure API keys
 
+You can place your `.env` file in either of these locations:
+* **Globally (Recommended):** At `~/.mcp-blender/.env` (shared automatically by both the addon and the server).
+* **Locally:** In the current working directory from which you run the server.
+
 ```bash
+# Example for local setup:
 cp .env.example .env
 ```
 
@@ -288,7 +293,7 @@ For Claude Code, Claude Desktop, Antigravity, or Cursor:
 {
   "mcpServers": {
     "blender": {
-      "command": "mcp-blender-pakkio"
+      "command": "mcp-blender"
     }
   }
 }

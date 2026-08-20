@@ -2,8 +2,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.bridge import HEAVY_REQUEST_TIMEOUT_S
-from mcp_blender_pakkio.tools.simplify_geometry_ops import register_simplify_geometry_tools
+from mcp_blender.bridge import HEAVY_REQUEST_TIMEOUT_S
+from mcp_blender.tools.simplify_geometry_ops import register_simplify_geometry_tools
 
 
 @pytest.mark.asyncio
@@ -46,7 +46,7 @@ async def test_simplify_geometry_happy_path_defaults():
 
 @pytest.mark.asyncio
 async def test_simplify_geometry_failure_raises_bridge_error():
-    from mcp_blender_pakkio.errors import BridgeError
+    from mcp_blender.errors import BridgeError
 
     bridge = AsyncMock()
     bridge.send_request.return_value = {

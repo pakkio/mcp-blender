@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.tools.physics_simulation_ops import register_physics_simulation_tools
+from mcp_blender.tools.physics_simulation_ops import register_physics_simulation_tools
 
 
 @pytest.mark.asyncio

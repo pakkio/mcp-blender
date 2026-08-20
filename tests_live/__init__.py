@@ -1,1 +1,1 @@
-"""Live in-Blender test suite for mcp-blender-pakkio extension tools."""
+"""Live in-Blender test suite for mcp-blender extension tools."""

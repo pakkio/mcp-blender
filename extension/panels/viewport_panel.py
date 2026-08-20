@@ -15,7 +15,7 @@ from .preferences import status_text_and_icon
 
 
 class MCP_OT_create_checkpoint(bpy.types.Operator):
-    bl_idname = "mcp_bridge_pakkio.create_checkpoint"
+    bl_idname = "mcp_bridge.create_checkpoint"
     bl_label = "Create Scene Checkpoint"
     bl_description = "Save a full scene snapshot to disk that can be restored later"
     bl_options = {"REGISTER", "UNDO"}
@@ -40,7 +40,7 @@ class MCP_OT_create_checkpoint(bpy.types.Operator):
 
 
 class MCP_OT_regen_names(bpy.types.Operator):
-    bl_idname = "mcp_bridge_pakkio.regen_names"
+    bl_idname = "mcp_bridge.regen_names"
     bl_label = "Regenerate Names"
     bl_description = (
         "Rename selected objects/hierarchy, active collection, or scene into clean localized vocabulary "
@@ -158,7 +158,7 @@ class MCP_OT_regen_names(bpy.types.Operator):
 
 
 class MCP_OT_separate_logical_areas(bpy.types.Operator):
-    bl_idname = "mcp_bridge_pakkio.separate_logical_areas"
+    bl_idname = "mcp_bridge.separate_logical_areas"
     bl_label = "Separate in Logical Areas"
     bl_description = (
         "Analyze the selected mesh, separate it into logical parts (loose parts or materials), "
@@ -224,7 +224,7 @@ _VERIFY_SKIP_KEYWORDS = ("render", "bake", "batch", "fluid")
 
 
 class MCP_OT_verify_tools(bpy.types.Operator):
-    bl_idname = "mcp_bridge_pakkio.verify_tools"
+    bl_idname = "mcp_bridge.verify_tools"
     bl_label = "Verify Tools"
     bl_description = (
         "Health-check every registered tool: confirms it's well-formed, then calls execute({}) "
@@ -301,9 +301,9 @@ class MCP_OT_verify_tools(bpy.types.Operator):
 
         if crashed or malformed:
             for name, err in crashed:
-                print(f"[MCP Bridge Pakkio] '{name}'.execute({{}}) raised: {err}")
+                print(f"[MCP Bridge] '{name}'.execute({{}}) raised: {err}")
             for name in malformed:
-                print(f"[MCP Bridge Pakkio] '{name}' is malformed in TOOL_REGISTRY")
+                print(f"[MCP Bridge] '{name}' is malformed in TOOL_REGISTRY")
             self.report({"WARNING"}, summary + " -- see System Console for details")
             return {"CANCELLED"}
 
@@ -454,7 +454,7 @@ def _run_search_callback(self, context):
 
 
 class MCP_OT_super_import(bpy.types.Operator):
-    bl_idname = "mcp_bridge_pakkio.super_import"
+    bl_idname = "mcp_bridge.super_import"
     bl_label = "Super Import"
     bl_description = (
         "Search online models across Poly Haven, Sketchfab, and ambientCG with previews, "
@@ -734,7 +734,7 @@ class MCP_OT_super_import(bpy.types.Operator):
 
 
 class MCP_OT_normalize_model(bpy.types.Operator):
-    bl_idname = "mcp_bridge_pakkio.normalize_model"
+    bl_idname = "mcp_bridge.normalize_model"
     bl_label = "Normalize Scale & Ground"
     bl_description = "Rescale selected objects to real-world dimensions (e.g. 2.0m) and place base flush on ground Z=0"
     bl_options = {"REGISTER", "UNDO"}
@@ -800,7 +800,7 @@ class MCP_OT_normalize_model(bpy.types.Operator):
 
 
 class MCP_OT_simplify_mesh(bpy.types.Operator):
-    bl_idname = "mcp_bridge_pakkio.simplify_mesh"
+    bl_idname = "mcp_bridge.simplify_mesh"
     bl_label = "Simplify Mesh"
     bl_description = "Reduce vertex budget using decimate, voxel remesh, or form-preserving simplify geometry"
     bl_options = {"REGISTER", "UNDO"}
@@ -965,7 +965,7 @@ def _list_checkpoint_names() -> list[str]:
 
 
 class MCP_OT_restore_checkpoint(bpy.types.Operator):
-    bl_idname = "mcp_bridge_pakkio.restore_checkpoint"
+    bl_idname = "mcp_bridge.restore_checkpoint"
     bl_label = "Restore Scene Checkpoint"
     bl_description = "Restore the scene to a previously saved checkpoint snapshot"
     bl_options = {"REGISTER", "UNDO"}
@@ -1011,7 +1011,7 @@ class MCP_OT_restore_checkpoint(bpy.types.Operator):
 
 
 class MCP_OT_ai_generate(bpy.types.Operator):
-    bl_idname = "mcp_bridge_pakkio.ai_generate"
+    bl_idname = "mcp_bridge.ai_generate"
     bl_label = "AI Generate 3D Model"
     bl_description = "Generate a text-to-3D model using Meshy AI or Tripo3D with auto-simplification"
     bl_options = {"REGISTER", "UNDO"}

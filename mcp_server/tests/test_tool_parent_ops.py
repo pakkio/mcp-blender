@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.tools.parent_ops import register_parent_tools
+from mcp_blender.tools.parent_ops import register_parent_tools
 
 
 @pytest.mark.asyncio

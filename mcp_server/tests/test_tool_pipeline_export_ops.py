@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.tools.pipeline_export_ops import register_pipeline_export_tools
+from mcp_blender.tools.pipeline_export_ops import register_pipeline_export_tools
 
 
 @pytest.mark.asyncio

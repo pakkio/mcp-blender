@@ -2,9 +2,9 @@ import asyncio
 
 import pytest
 
-from mcp_blender_pakkio import bridge as bridge_module
-from mcp_blender_pakkio.bridge import BlenderBridge, ConnectionState
-from mcp_blender_pakkio.errors import BridgeError, ErrorType
+from mcp_blender import bridge as bridge_module
+from mcp_blender.bridge import BlenderBridge, ConnectionState
+from mcp_blender.errors import BridgeError, ErrorType
 
 from conftest import FakeBlenderServer, _free_port
 

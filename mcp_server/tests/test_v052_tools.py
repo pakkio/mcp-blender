@@ -2,8 +2,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from mcp.server.fastmcp import FastMCP
 
-from mcp_blender_pakkio.bridge import BlenderBridge
-from mcp_blender_pakkio.tools import register_legacy_tools
+from mcp_blender.bridge import BlenderBridge
+from mcp_blender.tools import register_legacy_tools
 
 
 @pytest.fixture

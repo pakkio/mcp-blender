@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from conftest import FakeMCP
-from mcp_blender_pakkio.errors import BridgeError, ErrorType
-from mcp_blender_pakkio.tools.get_scene_info import register_get_scene_info_tool
+from mcp_blender.errors import BridgeError, ErrorType
+from mcp_blender.tools.get_scene_info import register_get_scene_info_tool
 
 
 @pytest.mark.asyncio
