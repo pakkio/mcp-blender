@@ -53,11 +53,17 @@ class RestoreSceneCheckpointTool(ToolBase):
         if not file_path.exists():
             return {"success": False, "message": f"Checkpoint '{clean_name}' not found at {file_path}"}
 
+        filepath_str = str(file_path)
+
+        def _deferred_load():
+            bpy.ops.wm.open_mainfile(filepath=filepath_str)
+            return None
+
         try:
-            bpy.ops.wm.open_mainfile(filepath=str(file_path))
+            bpy.app.timers.register(_deferred_load, first_interval=0.1)
             return {
                 "success": True,
-                "message": f"Scene restored to checkpoint '{clean_name}'",
+                "message": f"Scene restore to checkpoint '{clean_name}' scheduled (loading in ~0.1s)",
                 "checkpoint_name": clean_name,
             }
         except Exception as exc:

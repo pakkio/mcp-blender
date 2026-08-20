@@ -27,67 +27,6 @@ class BlenderDocsParams(BaseModel):
     category: Optional[str] = Field(default=None, description="Optional filter category ('RECIPE', 'MESH', 'MATERIAL', 'ASSETS', 'SCENE', 'RIGGING', 'LIGHTING', 'PHYSICS', 'RENDER', 'ALL')")
 
 
-class BlenderMeshParams(BaseModel):
-    action: Literal[
-        "create",
-        "delete",
-        "duplicate",
-        "transform",
-        "apply_transform",
-        "boolean",
-        "decimate",
-        "remesh",
-        "uv_unwrap",
-        "mesh_op",
-        "modifier",
-        "origin_cursor",
-    ] = Field(description="Action to perform on mesh geometry")
-    params: dict[str, Any] = Field(default_factory=dict, description="Action arguments (e.g. type='CUBE', object_name='Cube', ratio=0.1)")
-
-
-class BlenderMaterialParams(BaseModel):
-    action: Literal[
-        "create",
-        "assign",
-        "pbr_setup",
-        "procedural_grunge",
-        "toon_shader",
-        "transparency",
-        "triplanar",
-        "slots",
-        "edit_nodes",
-    ] = Field(description="Action to perform on materials/shaders")
-    params: dict[str, Any] = Field(default_factory=dict, description="Action arguments (e.g. material_name='Gold', base_color=[0.8, 0.6, 0.2, 1.0])")
-
-
-class BlenderAssetsParams(BaseModel):
-    action: Literal[
-        "search_online",
-        "import_online",
-        "meshy_generate",
-        "tripo_generate",
-        "asset_browser",
-    ] = Field(description="Asset action (search, AI text-to-3d generation, import)")
-    params: dict[str, Any] = Field(default_factory=dict, description="Action arguments (e.g. query='snake', provider='meshy', prompt='a sword', target_poly_budget=25000)")
-
-
-class BlenderSceneParams(BaseModel):
-    action: Literal[
-        "info",
-        "hierarchy",
-        "collection",
-        "checkpoint_create",
-        "checkpoint_restore",
-        "checkpoint_list",
-        "purge_orphans",
-        "job_status",
-        "job_list",
-        "job_cancel",
-        "performance",
-    ] = Field(description="Scene-level inspection, hierarchy, snapshot checkpoints, and background job operations")
-    params: dict[str, Any] = Field(default_factory=dict, description="Action arguments (e.g. include_hierarchy=True, name='pre_sim', job_id='job_1')")
-
-
 class BlenderRiggingAnimParams(BaseModel):
     action: Literal[
         "create_armature",
@@ -264,8 +203,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
         action: Literal[
             "search_online",
             "import_online",
-            "meshy_generate",
-            "tripo_generate",
+            "ai_generate",
             "asset_browser",
         ],
         params: Optional[dict[str, Any]] = None,
@@ -291,25 +229,24 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
                 up_axis=p.get("up_axis"),
                 auto_orient=p.get("auto_orient", False),
             )
-        elif action == "meshy_generate":
+        elif action == "ai_generate":
             prompt = p.get("prompt", p.get("query", ""))
+            if not prompt:
+                raise BridgeError(ErrorType.VALIDATION, "'prompt' is required for ai_generate")
+            provider = (p.get("provider", "meshy") or "meshy").lower()
+            reduction = (p.get("reduction_method", "simplify") or "simplify").lower()
+            target_verts = int(p.get("target_vertices", 30000))
+
+            asset_id = f"{provider}_prompt_{prompt.replace(' ', '_')[:30]}"
+            provider_label = provider.capitalize()
+            collection = p.get("collection_path", f"Generated/{provider_label}")
+
             return await import_tool(
-                asset_id=f"meshy_prompt_{prompt.replace(' ', '_')[:30]}",
-                provider="meshy",
-                target_poly_budget=p.get("target_poly_budget", 30000),
-                collection_path=p.get("collection_path", "Generated/Meshy"),
-                location=p.get("location"),
-                forward_axis=p.get("forward_axis"),
-                up_axis=p.get("up_axis"),
-                auto_orient=p.get("auto_orient", False),
-            )
-        elif action == "tripo_generate":
-            prompt = p.get("prompt", p.get("query", ""))
-            return await import_tool(
-                asset_id=f"tripo_{prompt.replace(' ', '_')[:30]}",
-                provider="tripo",
-                target_poly_budget=p.get("target_poly_budget", 25000),
-                collection_path=p.get("collection_path", "Generated/Tripo"),
+                asset_id=asset_id,
+                provider=provider,
+                target_poly_budget=target_verts,
+                reduction_method=reduction if reduction != "none" else None,
+                collection_path=collection,
                 location=p.get("location"),
                 forward_axis=p.get("forward_axis"),
                 up_axis=p.get("up_axis"),

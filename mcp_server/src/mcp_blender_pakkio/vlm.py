@@ -60,21 +60,41 @@ async def critique_image(question: str, png_bytes: bytes, model: str | None = No
         ],
     }
 
+    tried_models = [resolved_model]
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
-        try:
-            response = await client.post(
-                OPENROUTER_URL,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-            )
-        except httpx.HTTPError as exc:
-            raise VLMError(f"OpenRouter request failed: {exc}") from exc
+        for attempt_model in tried_models:
+            payload["model"] = attempt_model
+            try:
+                response = await client.post(
+                    OPENROUTER_URL,
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                )
+            except httpx.HTTPError as exc:
+                raise VLMError(f"OpenRouter request failed: {exc}") from exc
 
-    if response.status_code != 200:
-        raise VLMError(f"OpenRouter returned {response.status_code}: {response.text[:500]}")
+            if response.status_code == 200:
+                break
+
+            text = response.text[:500]
+            vision_incompatible = "does not support image" in text.lower() or "image_url" in text.lower()
+
+            if vision_incompatible and attempt_model != DEFAULT_VISION_MODEL:
+                tried_models.append(DEFAULT_VISION_MODEL)
+                continue
+
+            if vision_incompatible:
+                raise VLMError(
+                    f"The model '{attempt_model}' does not support image input. "
+                    f"Set OPENROUTER_VISION_MODEL to a vision-capable model "
+                    f"(e.g. 'google/gemini-2.5-flash' or 'qwen/qwen3-vl-32b-instruct') "
+                    f"in your .env file, or remove the variable to use the default."
+                )
+
+            raise VLMError(f"OpenRouter returned {response.status_code}: {text}")
 
     body = response.json()
     try:
@@ -85,7 +105,7 @@ async def critique_image(question: str, png_bytes: bytes, model: str | None = No
     usage = body.get("usage", {})
     return {
         "critique": critique,
-        "model": resolved_model,
+        "model": payload["model"],
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
     }
