@@ -60,6 +60,8 @@ async def critique_image(question: str, png_bytes: bytes, model: str | None = No
         ],
     }
 
+    _VISION_INCOMPATIBLE = ("does not support image", "image_url", "cannot read", "image input")
+
     tried_models = [resolved_model]
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_S) as client:
         for attempt_model in tried_models:
@@ -76,11 +78,28 @@ async def critique_image(question: str, png_bytes: bytes, model: str | None = No
             except httpx.HTTPError as exc:
                 raise VLMError(f"OpenRouter request failed: {exc}") from exc
 
-            if response.status_code == 200:
-                break
+            text = response.text[:2000]
+            _body = {}
+            try:
+                _body = response.json() if response.status_code == 200 else {}
+            except ValueError:
+                pass
 
-            text = response.text[:500]
-            vision_incompatible = "does not support image" in text.lower() or "image_url" in text.lower()
+            # Check both HTTP error body and (crucially) 200 OK content for
+            # vision-incompatibility signals -- some models return the error
+            # as successful content rather than as an HTTP error.
+            _critique_candidate = ""
+            try:
+                _critique_candidate = _body["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError):
+                pass
+
+            _combined = (text + " " + _critique_candidate).lower()
+            vision_incompatible = any(sig in _combined for sig in _VISION_INCOMPATIBLE)
+
+            if response.status_code == 200 and not vision_incompatible:
+                critique = _critique_candidate
+                break
 
             if vision_incompatible and attempt_model != DEFAULT_VISION_MODEL:
                 tried_models.append(DEFAULT_VISION_MODEL)
@@ -96,13 +115,7 @@ async def critique_image(question: str, png_bytes: bytes, model: str | None = No
 
             raise VLMError(f"OpenRouter returned {response.status_code}: {text}")
 
-    body = response.json()
-    try:
-        critique = body["choices"][0]["message"]["content"]
-    except (KeyError, IndexError) as exc:
-        raise VLMError(f"Unexpected OpenRouter response shape: {body}") from exc
-
-    usage = body.get("usage", {})
+    usage = _body.get("usage", {})
     return {
         "critique": critique,
         "model": payload["model"],

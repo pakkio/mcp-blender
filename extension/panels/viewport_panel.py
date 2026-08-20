@@ -945,6 +945,188 @@ class MCP_OT_simplify_mesh(bpy.types.Operator):
                 context.window.cursor_modal_restore()
 
 
+import os
+import tempfile
+from pathlib import Path
+
+_CHECKPOINT_DIR = Path(tempfile.gettempdir()) / "mcp_blender_checkpoints"
+
+
+def _list_checkpoint_names() -> list[str]:
+    if not _CHECKPOINT_DIR.is_dir():
+        return []
+    return sorted(
+        [p.stem for p in _CHECKPOINT_DIR.glob("*.blend")],
+        key=lambda n: (_CHECKPOINT_DIR / f"{n}.blend").stat().st_mtime,
+        reverse=True,
+    )
+
+
+class MCP_OT_restore_checkpoint(bpy.types.Operator):
+    bl_idname = "mcp_bridge_pakkio.restore_checkpoint"
+    bl_label = "Restore Scene Checkpoint"
+    bl_description = "Restore the scene to a previously saved checkpoint snapshot"
+    bl_options = {"REGISTER", "UNDO"}
+
+    checkpoint: bpy.props.EnumProperty(
+        name="Checkpoint",
+        description="Select a checkpoint to restore",
+        items=lambda self, ctx: [
+            (n, n, f"Restore checkpoint '{n}'") for n in _list_checkpoint_names()
+        ] or [("NONE", "No checkpoints found", "Create one first with 'Create Scene Checkpoint'")],
+    )
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=420)
+
+    def draw(self, context):
+        layout = self.layout
+        box = layout.box()
+        box.label(text="Restore Scene Checkpoint", icon="FILE_TICK")
+        box.prop(self, "checkpoint")
+        if self.checkpoint == "NONE":
+            box.label(text="No checkpoints available. Create one first.", icon="INFO")
+
+    def execute(self, context):
+        if self.checkpoint == "NONE":
+            self.report({"WARNING"}, "No checkpoint selected")
+            return {"CANCELLED"}
+
+        from ..tools import TOOL_REGISTRY
+
+        if context.window:
+            context.window.cursor_modal_set("WAIT")
+        try:
+            result = TOOL_REGISTRY["restore_scene_checkpoint"].execute({"name": self.checkpoint})
+            if not result.get("success"):
+                self.report({"ERROR"}, result.get("message", "Restore failed"))
+                return {"CANCELLED"}
+            self.report({"INFO"}, result["message"])
+            return {"FINISHED"}
+        finally:
+            if context.window:
+                context.window.cursor_modal_restore()
+
+
+class MCP_OT_ai_generate(bpy.types.Operator):
+    bl_idname = "mcp_bridge_pakkio.ai_generate"
+    bl_label = "AI Generate 3D Model"
+    bl_description = "Generate a text-to-3D model using Meshy AI or Tripo3D with auto-simplification"
+    bl_options = {"REGISTER", "UNDO"}
+
+    provider: bpy.props.EnumProperty(
+        name="Provider",
+        description="AI 3D generation provider",
+        items=[
+            ("meshy", "Meshy AI", "Meshy AI text-to-3D generation", "SHADERFX", 0),
+            ("tripo", "Tripo3D", "Tripo3D text-to-3D generation", "VIEW3D", 1),
+        ],
+        default="meshy",
+    )
+
+    prompt: bpy.props.StringProperty(
+        name="Prompt",
+        description="Text description of the 3D model to generate (e.g. 'a medieval sword', 'a wooden chair')",
+        default="",
+    )
+
+    reduction_method: bpy.props.EnumProperty(
+        name="Reduction Method",
+        description="Mesh reduction applied after generation",
+        items=[
+            ("simplify", "Simplify (Preserve Form)", "Form-preserving repair & curvature decimation", "MOD_DECIM", 0),
+            ("decimate", "Decimate (Ratio)", "Standard ratio decimation", "MOD_SIMPLIFY", 1),
+            ("remesh", "Voxel Remesh", "Uniform voxel reconstruction (destroys UVs)", "MOD_REMESH", 2),
+            ("none", "None (Keep Original)", "Do not reduce generated mesh", "RESTRICT_RENDER_OFF", 3),
+        ],
+        default="simplify",
+    )
+
+    target_vertices: bpy.props.IntProperty(
+        name="Target Vertices",
+        description="Target vertex count budget for the generated model",
+        default=30000,
+        min=100,
+        max=100000,
+        step=1000,
+    )
+
+    collection_name: bpy.props.StringProperty(
+        name="Collection",
+        description="Target collection (e.g. 'Generated/Meshy')",
+        default="",
+    )
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=480)
+
+    def draw(self, context):
+        layout = self.layout
+        box = layout.box()
+        box.label(text="AI Text-to-3D Generation", icon="SHADERFX")
+        box.prop(self, "provider")
+        box.prop(self, "prompt")
+
+        layout.separator()
+        box_sim = layout.box()
+        box_sim.label(text="Mesh Reduction & Budget", icon="MOD_DECIM")
+        box_sim.prop(self, "reduction_method")
+        if self.reduction_method != "none":
+            box_sim.prop(self, "target_vertices")
+
+        layout.separator()
+        box_opt = layout.box()
+        box_opt.label(text="Placement", icon="TOOL_SETTINGS")
+        box_opt.prop(self, "collection_name")
+
+    def execute(self, context):
+        if not self.prompt.strip():
+            self.report({"ERROR"}, "Please enter a prompt for the 3D model")
+            return {"CANCELLED"}
+
+        from ..tools import TOOL_REGISTRY
+
+        collection = self.collection_name.strip()
+        if not collection:
+            provider_label = self.provider.capitalize()
+            collection = f"Generated/{provider_label}"
+
+        params = {
+            "prompt": self.prompt.strip(),
+            "provider": self.provider,
+            "reduction_method": self.reduction_method,
+            "target_vertices": self.target_vertices,
+            "collection_path": collection,
+        }
+
+        if context.window:
+            context.window.cursor_modal_set("WAIT")
+        try:
+            result = TOOL_REGISTRY["super_import"].execute({
+                "source_type": "URL",
+                "provider": self.provider,
+                "asset_id": f"{self.provider}_prompt_{self.prompt.strip().replace(' ', '_')[:30]}",
+                "filepath": "",
+                "url": "",
+                "simplifier_tool": self.reduction_method.upper() if self.reduction_method != "none" else "NONE",
+                "target_vertices": self.target_vertices,
+                "auto_orient": True,
+                "normalize_scale": True,
+                "target_size": 2.0,
+                "ground_to_floor": True,
+                "center_xy": True,
+                "collection_name": collection,
+            })
+            if not result.get("success"):
+                self.report({"ERROR"}, result.get("message", "AI generation failed"))
+                return {"CANCELLED"}
+            self.report({"INFO"}, result["message"])
+            return {"FINISHED"}
+        finally:
+            if context.window:
+                context.window.cursor_modal_restore()
+
+
 class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
     bl_label = "MCP Bridge"
     bl_space_type = "VIEW_3D"
@@ -958,10 +1140,12 @@ class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
 
         layout.separator()
         layout.operator(MCP_OT_super_import.bl_idname, icon="IMPORT")
+        layout.operator(MCP_OT_ai_generate.bl_idname, icon="SHADERFX")
         layout.operator(MCP_OT_normalize_model.bl_idname, icon="ORIENTATION_GIMBAL")
         layout.operator(MCP_OT_simplify_mesh.bl_idname, icon="MOD_DECIM")
         layout.separator()
         layout.operator(MCP_OT_create_checkpoint.bl_idname, icon="FILE_TICK")
+        layout.operator(MCP_OT_restore_checkpoint.bl_idname, icon="FILE_REFRESH")
         layout.operator(MCP_OT_regen_names.bl_idname, icon="WORLD")
         layout.operator(MCP_OT_separate_logical_areas.bl_idname, icon="MESH_DATA")
         layout.separator()
@@ -970,9 +1154,11 @@ class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
 
 CLASSES = (
     MCP_OT_super_import,
+    MCP_OT_ai_generate,
     MCP_OT_normalize_model,
     MCP_OT_simplify_mesh,
     MCP_OT_create_checkpoint,
+    MCP_OT_restore_checkpoint,
     MCP_OT_regen_names,
     MCP_OT_separate_logical_areas,
     MCP_OT_verify_tools,
