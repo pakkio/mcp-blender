@@ -705,6 +705,7 @@ class SuperImportTool(ToolBase):
 
     def execute(self, params: dict) -> dict:
         from . import TOOL_REGISTRY
+        from .progress_hud_ops import push_hud_update
 
         action = params.get("action", "import")
         if action == "search":
@@ -755,6 +756,17 @@ class SuperImportTool(ToolBase):
         resolved_path: Path | None = None
         asset_nature = "MODEL"
         credits_info = None
+
+        # force_redraw=True throughout: Super Import runs entirely inside one
+        # blocking Operator.execute()/tool-dispatch call (download + import +
+        # simplify), so a plain tag_redraw() would never actually paint until
+        # the whole pass is done -- see push_hud_update's docstring.
+        push_hud_update(
+            title="Super Import",
+            status=f"Resolving asset from {provider}...",
+            progress_percent=5.0,
+            force_redraw=True,
+        )
 
         try:
             # AI text-to-3D generation (Meshy AI / Tripo3D) -- checked first so an
@@ -850,6 +862,13 @@ class SuperImportTool(ToolBase):
             if not import_tool:
                 return {"success": False, "message": "import_file tool not registered"}
 
+            push_hud_update(
+                title="Super Import",
+                status=f"Importing '{resolved_path.name}'...",
+                progress_percent=45.0,
+                force_redraw=True,
+            )
+
             import_res = import_tool.execute({
                 "filepath": str(resolved_path),
                 "auto_orient": auto_orient,
@@ -876,10 +895,20 @@ class SuperImportTool(ToolBase):
             # Step 1: Mesh Simplification
             if simplifier_tool != "NONE" and target_vertices and int(target_vertices) > 0:
                 budget = int(target_vertices)
-                for obj in mesh_objs:
+                total_mesh_objs = len(mesh_objs)
+                for idx, obj in enumerate(mesh_objs, 1):
                     current_verts = len(obj.data.vertices)
                     if current_verts <= budget:
                         continue
+
+                    push_hud_update(
+                        title="Super Import",
+                        status=f"Simplifying '{obj.name}' ({idx}/{total_mesh_objs})...",
+                        progress_percent=50.0 + (idx - 1) / total_mesh_objs * 35.0,
+                        step_current=idx,
+                        step_total=total_mesh_objs,
+                        force_redraw=True,
+                    )
 
                     if simplifier_tool == "SIMPLIFY":
                         simplify_tool = TOOL_REGISTRY.get("simplify_geometry")
@@ -928,6 +957,12 @@ class SuperImportTool(ToolBase):
             # Step 2: Scale & Placement Normalization
             norm_log = ""
             if normalize_scale and all_imported_objs:
+                push_hud_update(
+                    title="Super Import",
+                    status="Normalizing scale & placement...",
+                    progress_percent=90.0,
+                    force_redraw=True,
+                )
                 norm_res = normalize_objects_transform(
                     all_imported_objs,
                     target_size=target_size,
@@ -957,6 +992,15 @@ class SuperImportTool(ToolBase):
                 summary_msg += f" | {norm_log}"
             if simplification_log:
                 summary_msg += f" | {'; '.join(simplification_log)}"
+
+            push_hud_update(
+                title="Super Import",
+                status="Done",
+                progress_percent=100.0,
+                completed_summary=summary_msg[:80],
+                auto_hide_seconds=6.0,
+                force_redraw=True,
+            )
 
             return {
                 "success": True,

@@ -1,4 +1,4 @@
-# mcp-blender (v2.0.34)
+# mcp-blender (v2.0.35)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender` (v2.0.34) |
+| Capability | Generic Blender MCPs | `mcp-blender` (v2.0.35) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **138 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -252,6 +252,13 @@ The "Regenerate Names" and "Separate in Logical Areas" viewport panel buttons ca
 - **Separate in Logical Areas keeps every part visible** and renames the original source object(s) with a `.bak` suffix (hidden, not deleted) instead of just hiding them anonymously.
 - **Live progress instead of a frozen dialog**: since the vision pass runs inside one blocking button click, the floating progress HUD is now force-redrawn per part (`push_hud_update(..., force_redraw=True)`, via `wm.redraw_timer`) so you see per-part "i/total" progress and status text in real time instead of a greyed-out redo panel with no feedback until the whole pass finishes.
 
+### 31. Live Progress HUD for Super Import, Simplify Mesh & Verify Tools (v2.0.35)
+The same force-redrawn HUD pattern from item 30 was extended to the other viewport panel buttons that block the UI for a while, which previously gave no feedback at all until they finished:
+
+- **Simplify Mesh**: per-object "i/total" progress and status as each selected mesh is decimated/remeshed/form-preserving-simplified.
+- **Super Import**: staged progress through resolving the asset, downloading, importing, per-object simplification, and scale/ground normalization -- so a slow provider download or a large simplification pass no longer looks identical to a hang.
+- **Verify Tools**: per-tool "i/total" progress while health-checking the registry (up to 138 tools), with a completed-work summary on the final HUD frame.
+
 ### Required credentials
 The unified `.env` loader (v2.0.17) reads these. Each is only needed for the provider you actually use:
 
@@ -270,11 +277,11 @@ The unified `.env` loader (v2.0.17) reads these. Each is only needed for the pro
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge-2.0.34.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge-2.0.35.zip
 ```
 
 3. In Blender 4.2+, open **Preferences > Get Extensions > Install from Disk...**,
-   select `dist/mcp_bridge-2.0.34.zip`, and enable **MCP Bridge**.
+   select `dist/mcp_bridge-2.0.35.zip`, and enable **MCP Bridge**.
 
 ### 2. Install the MCP Server
 

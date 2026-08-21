@@ -506,6 +506,8 @@ class MCP_OT_verify_tools(bpy.types.Operator):
             col.label(text="in the isolated temp scene -- this can take noticeably longer.")
 
     def execute(self, context):
+        from ..tools.progress_hud_ops import push_hud_update
+
         malformed = []
         for name, tool in TOOL_REGISTRY.items():
             if not getattr(tool, "name", None) or not getattr(tool, "description", None):
@@ -521,13 +523,26 @@ class MCP_OT_verify_tools(bpy.types.Operator):
         validated = 0
         ran_clean = 0
         skipped = 0
+        total = len(TOOL_REGISTRY)
         if context.window:
             context.window.cursor_modal_set("WAIT")
         try:
-            for name, tool in TOOL_REGISTRY.items():
+            for idx, (name, tool) in enumerate(TOOL_REGISTRY.items(), 1):
                 if not self.include_heavy and any(k in name for k in _VERIFY_SKIP_KEYWORDS):
                     skipped += 1
                     continue
+                # force_redraw=True: this loop runs entirely inside one
+                # Operator.execute() call, so a plain tag_redraw() would never
+                # actually paint until every tool is done -- see
+                # push_hud_update's docstring.
+                push_hud_update(
+                    title="Verify Tools",
+                    status=f"Testing '{name}' ({idx}/{total})...",
+                    progress_percent=(idx - 1) / total * 100.0,
+                    step_current=idx,
+                    step_total=total,
+                    force_redraw=True,
+                )
                 try:
                     result = tool.execute({})
                     if isinstance(result, dict) and result.get("success") is False:
@@ -544,13 +559,23 @@ class MCP_OT_verify_tools(bpy.types.Operator):
             if context.window:
                 context.window.cursor_modal_restore()
 
-        total = len(TOOL_REGISTRY)
         summary = (
             f"{total} tools: {validated} validated cleanly, {ran_clean} ran with no params, "
             f"{skipped} skipped (heavy), {len(crashed)} raised an exception"
         )
         if malformed:
             summary += f"; {len(malformed)} malformed registration(s)"
+
+        push_hud_update(
+            title="Verify Tools",
+            status="Done",
+            progress_percent=100.0,
+            step_current=total,
+            step_total=total,
+            completed_summary=summary[:80],
+            auto_hide_seconds=6.0,
+            force_redraw=True,
+        )
 
         if crashed or malformed:
             for name, err in crashed:
@@ -1184,6 +1209,8 @@ class MCP_OT_simplify_mesh(bpy.types.Operator):
     def execute(self, context):
         import math
 
+        from ..tools.progress_hud_ops import push_hud_update
+
         mesh_objs = [obj for obj in context.selected_objects if obj.type == "MESH"]
         if not mesh_objs and context.active_object and context.active_object.type == "MESH":
             mesh_objs = [context.active_object]
@@ -1198,13 +1225,27 @@ class MCP_OT_simplify_mesh(bpy.types.Operator):
             simplification_log = []
             budget = self.target_vertices
             success_count = 0
+            total_objs = len(mesh_objs)
 
-            for obj in mesh_objs:
+            for idx, obj in enumerate(mesh_objs, 1):
                 current_verts = len(obj.data.vertices)
                 if current_verts <= budget:
                     simplification_log.append(f"'{obj.name}' already under budget ({current_verts} verts)")
                     success_count += 1
                     continue
+
+                # force_redraw=True: this loop runs entirely inside one
+                # Operator.execute() call, so a plain tag_redraw() would never
+                # actually paint until simplification of every selected mesh is
+                # done -- see push_hud_update's docstring.
+                push_hud_update(
+                    title="Simplify Mesh",
+                    status=f"{self.simplifier_tool.title()} '{obj.name}' ({idx}/{total_objs})...",
+                    progress_percent=(idx - 1) / total_objs * 100.0,
+                    step_current=idx,
+                    step_total=total_objs,
+                    force_redraw=True,
+                )
 
                 if self.simplifier_tool == "SIMPLIFY":
                     simplify_tool = TOOL_REGISTRY.get("simplify_geometry")
@@ -1269,6 +1310,16 @@ class MCP_OT_simplify_mesh(bpy.types.Operator):
 
             summary = "; ".join(simplification_log)
             if success_count > 0:
+                push_hud_update(
+                    title="Simplify Mesh",
+                    status=f"Done: {success_count}/{total_objs} mesh(es) simplified",
+                    progress_percent=100.0,
+                    step_current=total_objs,
+                    step_total=total_objs,
+                    completed_summary=summary[:80],
+                    auto_hide_seconds=6.0,
+                    force_redraw=True,
+                )
                 self.report({"INFO"}, f"Simplification done: {summary}")
                 return {"FINISHED"}
             else:
