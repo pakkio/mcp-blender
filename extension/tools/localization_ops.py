@@ -726,6 +726,26 @@ def _call_llm_classify(
     return _call_openrouter_json(system_prompt, user_content)
 
 
+def _relink_to_collection(obj, target_collection) -> None:
+    """Ensure obj lives only in target_collection.
+
+    bpy.ops.object.empty_add() links the new object into whatever the
+    *active* collection happens to be, which is not necessarily the scene
+    root or original_collection -- the old code only ever checked and
+    unlinked from bpy.context.scene.collection, so an empty created while a
+    third collection was active stayed double-linked (visible in two places
+    in the outliner). Unlink from everywhere except the intended target.
+    """
+    if target_collection not in obj.users_collection:
+        target_collection.objects.link(obj)
+    for col in list(obj.users_collection):
+        if col != target_collection:
+            try:
+                col.objects.unlink(obj)
+            except Exception:
+                pass
+
+
 def _duplicate_and_combine(target_objs: list, anchor_obj, original_name: str):
     """Duplicate every target object and, when more than one was selected,
     join the duplicates into a single working mesh.
@@ -745,6 +765,22 @@ def _duplicate_and_combine(target_objs: list, anchor_obj, original_name: str):
     dup_obj = bpy.context.active_object
     dup_obj.name = f"{original_name}_separate_temp"
     return dup_obj
+
+
+def _bbox_diagonal_world(obj) -> float:
+    """World-space bounding-box diagonal, used to scale the weld threshold to
+    this mesh's actual size instead of a fixed absolute distance."""
+    import math
+    from mathutils import Vector
+
+    if not obj.data or not obj.data.vertices:
+        return 0.0
+    mw = obj.matrix_world
+    corners = [mw @ Vector(c) for c in obj.bound_box]
+    xs = [c.x for c in corners]
+    ys = [c.y for c in corners]
+    zs = [c.z for c in corners]
+    return math.dist((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
 
 
 def _piece_center(obj) -> list[float]:
@@ -823,10 +859,28 @@ def _cluster_by_proximity(parts_info: list[dict], threshold_ratio: float = 0.18)
         if ra != rb:
             parent[ra] = rb
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            if math.dist(centers[i], centers[j]) <= threshold:
-                union(i, j)
+    # A raw OBJ import commonly loose-separates into thousands of pieces, and
+    # the naive all-pairs comparison below is O(n^2) -- ~4.5M math.dist calls
+    # at n=3000, freezing the UI on the main thread. Bucket centers into a grid
+    # sized to the threshold first so only points in the same or adjacent
+    # cells (guaranteed to cover every pair within `threshold`) are ever
+    # compared, which is near-linear for realistically distributed geometry.
+    cell = max(threshold, 1e-6)
+    grid: dict[tuple[int, int, int], list[int]] = {}
+    for i, c in enumerate(centers):
+        key = (int(c[0] // cell), int(c[1] // cell), int(c[2] // cell))
+        grid.setdefault(key, []).append(i)
+
+    for (cx, cy, cz), idxs in grid.items():
+        neighbor_idxs = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    neighbor_idxs.extend(grid.get((cx + dx, cy + dy, cz + dz), []))
+        for i in idxs:
+            for j in neighbor_idxs:
+                if j > i and math.dist(centers[i], centers[j]) <= threshold:
+                    union(i, j)
 
     clusters: dict[int, list[int]] = {}
     for i in range(n):
@@ -905,7 +959,13 @@ class SeparateLogicalAreasTool(ToolBase):
         # in a raw OBJ import) before separating -- otherwise mesh.separate(LOOSE)
         # treats every seam as a real disconnection and chops off stray pieces of an
         # otherwise-continuous body alongside genuinely separate meshes like clothes.
-        bpy.ops.mesh.remove_doubles(threshold=0.0001)
+        # A fixed absolute threshold breaks across scales -- a no-op on mm-scale
+        # imports, over-merging on huge ones -- so derive it from this mesh's own
+        # bbox diagonal instead, matching simplify_geometry_ops.py's _bbox_diagonal
+        # pattern. Kept tiny (1e-5 of the diagonal): the goal is only to close
+        # exact-duplicate UV-seam verts, not to fuse distinct touching parts.
+        weld_dist = max(1e-6, _bbox_diagonal_world(dup_obj) * 1e-5)
+        bpy.ops.mesh.remove_doubles(threshold=weld_dist)
         bpy.ops.mesh.separate(type='LOOSE')
         bpy.ops.object.mode_set(mode='OBJECT')
 
@@ -943,7 +1003,20 @@ class SeparateLogicalAreasTool(ToolBase):
         classification = _call_llm_classify(
             parts_info, lang, original_name, custom_prompt=custom_prompt, reorg_level=reorg_level
         )
-        used_llm = bool(classification and "groups" in classification and "names" in classification)
+        # `used_llm` used to only check the two keys exist. An LLM will still
+        # deviate from the requested shape (a list instead of a dict for
+        # "groups" is a common one -- only json_object mode constrains the
+        # top level, not nested types), which crashed groups.items() below
+        # *after* the scene had already been mutated -- debris plus a
+        # traceback. An empty-but-well-shaped response also used to count as
+        # "used_llm", silently skipping the heuristic and dumping every part
+        # into the orphan/misc group while still reporting "classified via LLM".
+        used_llm = bool(
+            classification
+            and isinstance(classification.get("groups"), dict)
+            and isinstance(classification.get("names"), dict)
+            and classification["groups"]
+        )
 
         # Fallback if LLM classification is empty/unavailable (no OPENROUTER_API_KEY)
         if not used_llm:
@@ -956,15 +1029,7 @@ class SeparateLogicalAreasTool(ToolBase):
         bpy.ops.object.empty_add(type='PLAIN_AXES', location=anchor_obj.location)
         root_empty = bpy.context.active_object
         root_empty.name = root_empty_name
-
-        if root_empty.name not in original_collection.objects:
-            original_collection.objects.link(root_empty)
-        if original_collection != bpy.context.scene.collection:
-            if root_empty.name in bpy.context.scene.collection.objects:
-                try:
-                    bpy.context.scene.collection.objects.unlink(root_empty)
-                except Exception:
-                    pass
+        _relink_to_collection(root_empty, original_collection)
 
         groups = classification.get("groups", {})
         names = classification.get("names", {})
@@ -974,15 +1039,15 @@ class SeparateLogicalAreasTool(ToolBase):
             group_empty = bpy.context.active_object
             group_empty.name = group_name
             group_empty.parent = root_empty
-
-            if group_empty.name not in original_collection.objects:
-                original_collection.objects.link(group_empty)
-            if original_collection != bpy.context.scene.collection:
-                if group_empty.name in bpy.context.scene.collection.objects:
-                    try:
-                        bpy.context.scene.collection.objects.unlink(group_empty)
-                    except Exception:
-                        pass
+            # Keep the child's world-space transform stable under its parent --
+            # both empties are created at anchor_obj.location, and without this
+            # every piece inherits the anchor's transform *again* on top of its
+            # own, so the organized hierarchy visibly jumps away from the
+            # source mesh (it only looked right when the source origin sat at
+            # world (0,0,0)). Matches the pattern already used for root-empty
+            # parenting in hierarchy_ops.py.
+            group_empty.matrix_parent_inverse = root_empty.matrix_world.inverted()
+            _relink_to_collection(group_empty, original_collection)
             return group_empty
 
         # The classifier is told every index must appear in exactly one group,
@@ -993,30 +1058,40 @@ class SeparateLogicalAreasTool(ToolBase):
         # groups despite only ever living under the last one to claim it.
         assigned: set[int] = set()
 
+        def _attach_piece(piece_obj, group_empty):
+            piece_obj.parent = group_empty
+            # Same world-space-stability reasoning as the group empty above.
+            piece_obj.matrix_parent_inverse = group_empty.matrix_world.inverted()
+
         report_groups = []
         for group_name, indices in groups.items():
             # Medium tier: one Empty per logical sub-assembly
             group_empty = _make_group_empty(group_name)
 
             group_pieces = []
-            for idx in indices:
-                try:
-                    obj_idx = int(idx)
-                except (ValueError, TypeError):
-                    continue
-                if not (0 <= obj_idx < len(separated_pieces)) or obj_idx in assigned:
-                    continue
-                # Micro tier: the individual named part
-                piece_obj = separated_pieces[obj_idx]
-                new_name = names.get(str(obj_idx)) or f"Part_{obj_idx}"
-                piece_obj.name = new_name
-                if piece_obj.data:
-                    piece_obj.data.name = new_name
-                piece_obj.parent = group_empty
-                assigned.add(obj_idx)
-                group_pieces.append(piece_obj.name)
+            if isinstance(indices, (list, tuple)):
+                for idx in indices:
+                    try:
+                        obj_idx = int(idx)
+                    except (ValueError, TypeError):
+                        continue
+                    if not (0 <= obj_idx < len(separated_pieces)) or obj_idx in assigned:
+                        continue
+                    # Micro tier: the individual named part
+                    piece_obj = separated_pieces[obj_idx]
+                    new_name = names.get(str(obj_idx)) or f"Part_{obj_idx}"
+                    piece_obj.name = new_name
+                    if piece_obj.data:
+                        piece_obj.data.name = new_name
+                    _attach_piece(piece_obj, group_empty)
+                    assigned.add(obj_idx)
+                    group_pieces.append(piece_obj.name)
+            # Read the name back from the object rather than echoing group_name:
+            # Blender auto-suffixes (".001") on a collision with an existing
+            # object, so the report would otherwise claim a group name that
+            # isn't actually what got created.
             report_groups.append({
-                "group": group_name,
+                "group": group_empty.name,
                 "parts": group_pieces
             })
 
@@ -1031,9 +1106,9 @@ class SeparateLogicalAreasTool(ToolBase):
                 piece_obj.name = new_name
                 if piece_obj.data:
                     piece_obj.data.name = new_name
-                piece_obj.parent = misc_empty
+                _attach_piece(piece_obj, misc_empty)
                 misc_pieces.append(piece_obj.name)
-            report_groups.append({"group": misc_name, "parts": misc_pieces})
+            report_groups.append({"group": misc_empty.name, "parts": misc_pieces})
 
         for obj in target_objs:
             obj.hide_viewport = True

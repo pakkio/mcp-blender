@@ -225,7 +225,15 @@ class MCP_OT_regen_names(bpy.types.Operator):
             self.report({"INFO"}, result["message"])
             MCP_OT_show_rename_result._pairs = result.get("renamed_pairs", [])
             MCP_OT_show_rename_result._message = result["message"]
-            bpy.ops.mcp_bridge.show_rename_result("INVOKE_DEFAULT")
+            try:
+                # execute() re-runs (re-billing the LLM call) whenever the user
+                # tweaks this operator's redo panel, and invoking another
+                # operator's dialog from inside that restricted redo context
+                # can raise RuntimeError -- the rename itself already
+                # succeeded, so don't let a dialog failure surface as a crash.
+                bpy.ops.mcp_bridge.show_rename_result("INVOKE_DEFAULT")
+            except RuntimeError:
+                pass
             return {"FINISHED"}
         finally:
             if context.window:
@@ -262,7 +270,6 @@ class MCP_OT_show_separate_result(bpy.types.Operator):
         for g in groups:
             box = layout.box()
             box.label(text=g["group"], icon="EMPTY_AXIS")
-            parts_text = ", ".join(g["parts"]) if g["parts"] else "(no parts)"
             col = box.column()
             col.scale_y = 0.9
             # Wrap long part lists instead of one label running off the dialog
@@ -362,7 +369,13 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
 
             self.report({"INFO"}, result["message"])
             MCP_OT_show_separate_result._result = result
-            bpy.ops.mcp_bridge.show_separate_result("INVOKE_DEFAULT")
+            try:
+                # Same redo-panel caveat as MCP_OT_regen_names.execute(): the
+                # separation already succeeded, so a dialog failure here
+                # shouldn't surface as a crash.
+                bpy.ops.mcp_bridge.show_separate_result("INVOKE_DEFAULT")
+            except RuntimeError:
+                pass
             return {"FINISHED"}
         finally:
             if context.window:
@@ -624,9 +637,11 @@ class MCP_OT_show_env_info(bpy.types.Operator):
 
     def invoke(self, context, event):
         MCP_OT_show_env_info._info = TOOL_REGISTRY["get_env_info"].execute({})
-        return context.window_manager.invoke_props_dialog(self, width=560)
+        return context.window_manager.invoke_props_dialog(self, width=640)
 
     def draw(self, context):
+        import os
+
         layout = self.layout
         info = MCP_OT_show_env_info._info or {}
 
@@ -634,11 +649,20 @@ class MCP_OT_show_env_info(bpy.types.Operator):
             layout.label(text=info.get("message", "Failed to read environment info"), icon="ERROR")
             return
 
+        # Precedence is "first candidate that declares the key wins" (see
+        # config.env_file_candidates), so number the files in that order and
+        # reuse the same number in the Keys table below -- a per-row full
+        # absolute path gets clipped in a narrow column and doesn't convey
+        # precedence anyway; "[N]" pointing back at this ordered list does.
         box_files = layout.box()
-        box_files.label(text=".env Files", icon="FILE_TEXT")
-        for f in info.get("env_files", []):
+        box_files.label(text=".env Files (search order, first match per key wins)", icon="FILE_TEXT")
+        path_to_index: dict[str, int] = {}
+        for i, f in enumerate(info.get("env_files", []), start=1):
+            path_to_index[f["path"]] = i
             row = box_files.row()
-            row.label(text=f["path"], icon="CHECKMARK" if f.get("exists") else "X")
+            row.label(text=f"{i}.", icon="CHECKMARK" if f.get("exists") else "X")
+            row.label(text=f["path"])
+            row.label(text="found" if f.get("exists") else "not found")
 
         layout.separator()
         box_keys = layout.box()
@@ -647,15 +671,26 @@ class MCP_OT_show_env_info(bpy.types.Operator):
         if not keys:
             box_keys.label(text="No keys found", icon="INFO")
         else:
-            header = box_keys.row()
+            header = box_keys.split(factor=0.35)
             header.label(text="Key")
-            header.label(text="Value")
-            header.label(text="Source")
+            sub = header.split(factor=0.4)
+            sub.label(text="Value")
+            sub.label(text="Source")
             for name, data in keys.items():
-                row = box_keys.row()
+                source = data.get("source") or ""
+                if source == "environment":
+                    source_text = "environment (real env var, wins over .env)"
+                elif source in path_to_index:
+                    # e.g. "[2] .mcp-blender\.env" -- short enough to stay
+                    # readable in-row, full path is row 2 in the box above.
+                    source_text = f"[{path_to_index[source]}] {os.path.basename(source)}"
+                else:
+                    source_text = source
+                row = box_keys.split(factor=0.35)
                 row.label(text=name)
-                row.label(text=data.get("masked", ""))
-                row.label(text=data.get("source") or "")
+                sub = row.split(factor=0.4)
+                sub.label(text=data.get("masked", ""))
+                sub.label(text=source_text)
 
         layout.separator()
         py = info.get("python", {})
