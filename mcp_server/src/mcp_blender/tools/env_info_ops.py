@@ -18,6 +18,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from ..bridge import BlenderBridge
+from ..config import parse_env_text
 
 KNOWN_SECRET_KEYS = (
     "SKETCHFAB_API_TOKEN",
@@ -53,17 +54,7 @@ def _parse_env_file(path: Path) -> dict[str, str]:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return {}
-    values: dict[str, str] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key:
-            values[key] = value
-    return values
+    return parse_env_text(text)
 
 
 def collect_env_info(home: os.PathLike | str | None = None) -> dict:
@@ -87,12 +78,16 @@ def collect_env_info(home: os.PathLike | str | None = None) -> dict:
     for name in sorted(names):
         env_value = os.environ.get(name)
         if name in values:
-            # Declared in a .env file: attribute to the file unless a real,
-            # different env var overrides it (dotenv itself never overrides).
-            value = values[name]
+            # os.environ already reflects the value the server actually uses
+            # (config.load_dotenv only fills gaps, real env vars always win --
+            # including an explicitly empty real value). Attribute the source
+            # to .env only when the effective value still matches what the
+            # .env file declared; any divergence means a real env var won,
+            # even if that real value is empty.
             source: str | None = sources[name]
-            if env_value and env_value != value:
-                value, source = env_value, "environment"
+            if env_value is not None and env_value != values[name]:
+                source = "environment"
+            value = env_value if env_value is not None else values[name]
         else:
             value, source = env_value, "environment"
         if value:

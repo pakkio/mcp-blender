@@ -39,9 +39,60 @@ class MCP_OT_create_checkpoint(bpy.types.Operator):
                 context.window.cursor_modal_restore()
 
 
+class MCP_OT_show_rename_result(bpy.types.Operator):
+    bl_idname = "mcp_bridge.show_rename_result"
+    bl_label = "Rename Result"
+    bl_description = "Show which names were changed by the last Regenerate Names run"
+    bl_options = {"REGISTER"}
+
+    _pairs = None
+    _message = ""
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=480)
+
+    def draw(self, context):
+        layout = self.layout
+        pairs = MCP_OT_show_rename_result._pairs or []
+
+        if not pairs:
+            layout.label(text="Nothing needed renaming -- all names already matched vocabulary.", icon="INFO")
+            return
+
+        layout.label(text=f"OK, renamed {len(pairs)} name(s):", icon="CHECKMARK")
+
+        # Literal "old1, old2, ... -> new1, new2, ..." summary, wrapped so it
+        # doesn't run off the dialog on hierarchies with many renamed parts.
+        box_summary = layout.box()
+        chunk = 6
+        for i in range(0, len(pairs), chunk):
+            group = pairs[i:i + chunk]
+            olds = ", ".join(p["old"] for p in group)
+            news = ", ".join(p["new"] for p in group)
+            box_summary.label(text=f"{olds}  ->  {news}")
+
+        layout.separator()
+        box_table = layout.box()
+        for p in pairs:
+            row = box_table.row()
+            row.label(text=p["old"], icon="OUTLINER_OB_MESH")
+            row.label(text="->", icon="FORWARD")
+            row.label(text=p["new"])
+
+    def execute(self, context):
+        return {"FINISHED"}
+
+
+REORG_LEVEL_ITEMS = [
+    ("LIGHT", "Light (minimal changes)", "Only fix clearly generic/garbled names, leave the rest alone -- fewer, coarser groups when separating", "TRIA_DOWN", 0),
+    ("STANDARD", "Standard", "Balanced renaming/regrouping", "DOT", 1),
+    ("DEEP", "Deep (thorough reorg)", "Rename/reorganize as much as possible -- finer, more granular groups when separating", "TRIA_UP", 2),
+]
+
+
 class MCP_OT_regen_names(bpy.types.Operator):
     bl_idname = "mcp_bridge.regen_names"
-    bl_label = "Regenerate Names"
+    bl_label = "Regenerate Names..."
     bl_description = (
         "Rename selected objects/hierarchy, active collection, or scene into clean localized vocabulary "
         "and re-link children/objects in alphabetical order"
@@ -77,8 +128,24 @@ class MCP_OT_regen_names(bpy.types.Operator):
 
     use_llm: bpy.props.BoolProperty(
         name="Use LLM Semantics",
-        description="Call LLM (Claude/GPT) using key from .env file to translate and organize hierarchy organically",
+        description="Call an LLM (via OPENROUTER_API_KEY in .env) to translate and organize hierarchy organically",
         default=True,
+    )
+
+    reorg_level: bpy.props.EnumProperty(
+        name="Reorg Level",
+        description="How aggressively the LLM should rename things (only applies with Use LLM Semantics)",
+        items=REORG_LEVEL_ITEMS,
+        default="STANDARD",
+    )
+
+    custom_prompt: bpy.props.StringProperty(
+        name="Custom Instructions",
+        description=(
+            "Optional free-text instructions passed to the LLM (e.g. 'use nautical terms', "
+            "'only rename hardware parts') -- only applies with Use LLM Semantics"
+        ),
+        default="",
     )
 
     def invoke(self, context, event):
@@ -116,12 +183,17 @@ class MCP_OT_regen_names(bpy.types.Operator):
         box_opt = layout.box()
         box_opt.prop(self, "rename_meshes")
         box_opt.prop(self, "use_llm")
+        if self.use_llm:
+            box_opt.prop(self, "reorg_level")
+            box_opt.prop(self, "custom_prompt", icon="TEXT")
 
     def execute(self, context):
         params = {
             "lang": self.lang,
             "rename_meshes": self.rename_meshes,
             "use_llm": self.use_llm,
+            "reorg_level": self.reorg_level,
+            "custom_prompt": self.custom_prompt,
         }
 
         if self.scope == "SELECTED":
@@ -151,18 +223,65 @@ class MCP_OT_regen_names(bpy.types.Operator):
                 return {"CANCELLED"}
 
             self.report({"INFO"}, result["message"])
+            MCP_OT_show_rename_result._pairs = result.get("renamed_pairs", [])
+            MCP_OT_show_rename_result._message = result["message"]
+            bpy.ops.mcp_bridge.show_rename_result("INVOKE_DEFAULT")
             return {"FINISHED"}
         finally:
             if context.window:
                 context.window.cursor_modal_restore()
 
 
+class MCP_OT_show_separate_result(bpy.types.Operator):
+    bl_idname = "mcp_bridge.show_separate_result"
+    bl_label = "Separation Result"
+    bl_description = "Show the macro/medium/micro breakdown produced by the last Separate in Logical Areas run"
+    bl_options = {"REGISTER"}
+
+    _result = None
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=480)
+
+    def draw(self, context):
+        layout = self.layout
+        result = MCP_OT_show_separate_result._result or {}
+        groups = result.get("groups", [])
+
+        if not groups:
+            layout.label(text="No groups were produced.", icon="ERROR")
+            return
+
+        total_parts = sum(len(g["parts"]) for g in groups)
+        classified_by = "LLM" if result.get("used_llm") else "heuristic clustering (no OPENROUTER_API_KEY)"
+        layout.label(
+            text=f"OK, separated into {len(groups)} group(s) / {total_parts} part(s) via {classified_by}:",
+            icon="CHECKMARK",
+        )
+
+        for g in groups:
+            box = layout.box()
+            box.label(text=g["group"], icon="EMPTY_AXIS")
+            parts_text = ", ".join(g["parts"]) if g["parts"] else "(no parts)"
+            col = box.column()
+            col.scale_y = 0.9
+            # Wrap long part lists instead of one label running off the dialog
+            chunk = 4
+            parts = g["parts"] or ["(no parts)"]
+            for i in range(0, len(parts), chunk):
+                col.label(text=", ".join(parts[i:i + chunk]))
+
+    def execute(self, context):
+        return {"FINISHED"}
+
+
 class MCP_OT_separate_logical_areas(bpy.types.Operator):
     bl_idname = "mcp_bridge.separate_logical_areas"
-    bl_label = "Separate in Logical Areas"
+    bl_label = "Separate in Logical Areas..."
     bl_description = (
-        "Analyze the selected mesh, separate it into logical parts (loose parts or materials), "
-        "and organize them under parent Empties using semantic classification (from LLM in .env)"
+        "Analyze the selected mesh(es) -- combining multiple selected objects into one working mesh first -- "
+        "separate into logical parts (loose parts or materials), and organize them under parent Empties as "
+        "macro/medium/micro areas using semantic classification (LLM via OPENROUTER_API_KEY in .env)"
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -176,10 +295,26 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
         default="it",
     )
 
+    reorg_level: bpy.props.EnumProperty(
+        name="Reorg Level",
+        description="How fine-grained the sub-assembly breakdown should be -- applies both to LLM classification and the no-LLM spatial-clustering fallback",
+        items=REORG_LEVEL_ITEMS,
+        default="STANDARD",
+    )
+
+    custom_prompt: bpy.props.StringProperty(
+        name="Custom Instructions",
+        description=(
+            "Optional free-text instructions passed to the LLM (e.g. 'separate hinges and glass into "
+            "their own group', 'ignore screws') -- only applies when OPENROUTER_API_KEY is configured"
+        ),
+        default="",
+    )
+
     def invoke(self, context, event):
-        active_obj = context.active_object
-        if not active_obj or active_obj.type != "MESH":
-            self.report({"ERROR"}, "Please select a MESH object in the 3D viewport first.")
+        mesh_objs = [o for o in context.selected_objects if o.type == "MESH"]
+        if not mesh_objs:
+            self.report({"ERROR"}, "Please select at least one MESH object in the 3D viewport first.")
             return {"CANCELLED"}
         return context.window_manager.invoke_props_dialog(self, width=380)
 
@@ -188,14 +323,35 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
         box = layout.box()
         box.label(text="Separate Mesh in Logical Areas", icon="MESH_DATA")
         box.prop(self, "lang")
-        
-        active_obj = context.active_object
-        if active_obj:
-            box.label(text=f"Selected: {active_obj.name}", icon="OBJECT_DATA")
+
+        mesh_objs = [o for o in context.selected_objects if o.type == "MESH"]
+        if not mesh_objs and context.active_object and context.active_object.type == "MESH":
+            mesh_objs = [context.active_object]
+
+        if mesh_objs:
+            count = len(mesh_objs)
+            names_preview = ", ".join(o.name for o in mesh_objs[:3])
+            if count > 3:
+                names_preview += f"... (+{count - 3} more)"
+            if count > 1:
+                box.label(text=f"Selected ({count}, will be combined): {names_preview}", icon="OBJECT_DATA")
+            else:
+                box.label(text=f"Selected: {names_preview}", icon="OBJECT_DATA")
+        else:
+            box.label(text="No mesh selected! (Select in 3D View)", icon="ERROR")
+
+        layout.separator()
+        box_opt = layout.box()
+        box_opt.prop(self, "reorg_level")
+        box_opt.prop(self, "custom_prompt", icon="TEXT")
 
     def execute(self, context):
-        params = {"lang": self.lang}
-        
+        params = {
+            "lang": self.lang,
+            "reorg_level": self.reorg_level,
+            "custom_prompt": self.custom_prompt,
+        }
+
         if context.window:
             context.window.cursor_modal_set("WAIT")
         try:
@@ -205,6 +361,8 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
                 return {"CANCELLED"}
 
             self.report({"INFO"}, result["message"])
+            MCP_OT_show_separate_result._result = result
+            bpy.ops.mcp_bridge.show_separate_result("INVOKE_DEFAULT")
             return {"FINISHED"}
         finally:
             if context.window:
@@ -225,7 +383,7 @@ _VERIFY_SKIP_KEYWORDS = ("render", "bake", "batch", "fluid")
 
 class MCP_OT_verify_tools(bpy.types.Operator):
     bl_idname = "mcp_bridge.verify_tools"
-    bl_label = "Verify Tools"
+    bl_label = "Verify Tools..."
     bl_description = (
         "Health-check every registered tool: confirms it's well-formed, then calls execute({}) "
         "in an isolated temporary scene (never your actual scene) to catch tools that raise an "
@@ -453,9 +611,66 @@ def _run_search_callback(self, context):
 
 
 
+class MCP_OT_show_env_info(bpy.types.Operator):
+    bl_idname = "mcp_bridge.show_env_info"
+    bl_label = ".env"
+    bl_description = (
+        "Show which .env files this Blender process loaded (with their full paths) and which "
+        "API keys/secrets are configured, masked as first3...last3 characters"
+    )
+    bl_options = {"REGISTER"}
+
+    _info = None
+
+    def invoke(self, context, event):
+        MCP_OT_show_env_info._info = TOOL_REGISTRY["get_env_info"].execute({})
+        return context.window_manager.invoke_props_dialog(self, width=560)
+
+    def draw(self, context):
+        layout = self.layout
+        info = MCP_OT_show_env_info._info or {}
+
+        if not info.get("success"):
+            layout.label(text=info.get("message", "Failed to read environment info"), icon="ERROR")
+            return
+
+        box_files = layout.box()
+        box_files.label(text=".env Files", icon="FILE_TEXT")
+        for f in info.get("env_files", []):
+            row = box_files.row()
+            row.label(text=f["path"], icon="CHECKMARK" if f.get("exists") else "X")
+
+        layout.separator()
+        box_keys = layout.box()
+        box_keys.label(text="Keys", icon="LOCKED")
+        keys = info.get("keys", {})
+        if not keys:
+            box_keys.label(text="No keys found", icon="INFO")
+        else:
+            header = box_keys.row()
+            header.label(text="Key")
+            header.label(text="Value")
+            header.label(text="Source")
+            for name, data in keys.items():
+                row = box_keys.row()
+                row.label(text=name)
+                row.label(text=data.get("masked", ""))
+                row.label(text=data.get("source") or "")
+
+        layout.separator()
+        py = info.get("python", {})
+        layout.label(
+            text=f"venv: {py.get('venv_path', '')} (in_venv={py.get('in_venv')}, python {py.get('version', '')})",
+            icon="SCRIPTPLUGINS",
+        )
+
+    def execute(self, context):
+        return {"FINISHED"}
+
+
 class MCP_OT_super_import(bpy.types.Operator):
     bl_idname = "mcp_bridge.super_import"
-    bl_label = "Super Import"
+    bl_label = "Super Import..."
     bl_description = (
         "Search online models across Poly Haven, Sketchfab, and ambientCG with previews, "
         "vertex counts, and credits, or import local files with automatic mesh simplification"
@@ -735,7 +950,7 @@ class MCP_OT_super_import(bpy.types.Operator):
 
 class MCP_OT_normalize_model(bpy.types.Operator):
     bl_idname = "mcp_bridge.normalize_model"
-    bl_label = "Normalize Scale & Ground"
+    bl_label = "Normalize Scale & Ground..."
     bl_description = "Rescale selected objects to real-world dimensions (e.g. 2.0m) and place base flush on ground Z=0"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -801,7 +1016,7 @@ class MCP_OT_normalize_model(bpy.types.Operator):
 
 class MCP_OT_simplify_mesh(bpy.types.Operator):
     bl_idname = "mcp_bridge.simplify_mesh"
-    bl_label = "Simplify Mesh"
+    bl_label = "Simplify Mesh..."
     bl_description = "Reduce vertex budget using decimate, voxel remesh, or form-preserving simplify geometry"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -966,7 +1181,7 @@ def _list_checkpoint_names() -> list[str]:
 
 class MCP_OT_restore_checkpoint(bpy.types.Operator):
     bl_idname = "mcp_bridge.restore_checkpoint"
-    bl_label = "Restore Scene Checkpoint"
+    bl_label = "Restore Scene Checkpoint..."
     bl_description = "Restore the scene to a previously saved checkpoint snapshot"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -1012,7 +1227,7 @@ class MCP_OT_restore_checkpoint(bpy.types.Operator):
 
 class MCP_OT_ai_generate(bpy.types.Operator):
     bl_idname = "mcp_bridge.ai_generate"
-    bl_label = "AI Generate 3D Model"
+    bl_label = "AI Generate 3D Model..."
     bl_description = "Generate a text-to-3D model using Meshy AI or Tripo3D with auto-simplification"
     bl_options = {"REGISTER", "UNDO"}
 
@@ -1187,6 +1402,7 @@ class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
         layout.label(text=text, icon=icon)
 
         layout.separator()
+        layout.operator(MCP_OT_show_env_info.bl_idname, icon="LOCKED")
         layout.operator(MCP_OT_super_import.bl_idname, icon="IMPORT")
         layout.operator(MCP_OT_ai_generate.bl_idname, icon="SHADERFX")
         layout.operator(MCP_OT_normalize_model.bl_idname, icon="ORIENTATION_GIMBAL")
@@ -1201,13 +1417,16 @@ class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
 
 
 CLASSES = (
+    MCP_OT_show_env_info,
     MCP_OT_super_import,
     MCP_OT_ai_generate,
     MCP_OT_normalize_model,
     MCP_OT_simplify_mesh,
     MCP_OT_create_checkpoint,
     MCP_OT_restore_checkpoint,
+    MCP_OT_show_rename_result,
     MCP_OT_regen_names,
+    MCP_OT_show_separate_result,
     MCP_OT_separate_logical_areas,
     MCP_OT_verify_tools,
     VIEW3D_PT_mcp_bridge,

@@ -20,6 +20,26 @@ ENV_PORT = "MCP_BLENDER_PORT"
 ENV_TOOL_MODE = "MCP_BLENDER_TOOL_MODE"  # "AGGREGATED" (default, 13 tools) or "FULL" (138 tools)
 
 
+def parse_env_text(text: str) -> dict[str, str]:
+    """Parse simple KEY=VALUE lines from .env file text into a dict.
+
+    Shared by _load_env_file (which applies these to os.environ) and
+    env_info_ops (which reports them without mutating os.environ), so the
+    two stay in sync automatically.
+    """
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            values[key] = value
+    return values
+
+
 def _load_env_file(path: Path) -> None:
     """Parse simple KEY=VALUE lines from a .env file into os.environ.
 
@@ -30,14 +50,8 @@ def _load_env_file(path: Path) -> None:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        if key and key not in os.environ:
+    for key, value in parse_env_text(text).items():
+        if key not in os.environ:
             os.environ[key] = value
 
 

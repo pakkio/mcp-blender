@@ -227,21 +227,85 @@ GENERIC_NAMES = {
     "suzanne", "monkey", "empty", "obj", "mesh", "object", "default",
     "node", "primitive", "submesh", "part", "element"
 }
-def _call_llm_rename(objects_info: list[dict], lang: str) -> dict[str, str]:
-    """Call OpenAI or Anthropic LLM to semantically translate and organize names."""
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_DEFAULT_MODEL = "google/gemini-2.5-flash"
+
+
+def _call_openrouter_json(system_prompt: str, user_content: str) -> dict:
+    """POST a system/user prompt pair to OpenRouter and parse a JSON object out
+    of the response. Shared by _call_llm_rename and _call_llm_classify.
+
+    Uses OPENROUTER_API_KEY (with optional OPENROUTER_VISION_MODEL override) --
+    the same provider/key convention as mcp_server's vlm.generate_text() and
+    every other LLM-backed tool in this addon, and the only LLM key
+    .env.example actually documents. This function replaces per-caller
+    ANTHROPIC_API_KEY/OPENAI_API_KEY checks that this project's setup never
+    tells users to set, which meant classification silently never fired and
+    callers always fell through to the much cruder heuristic fallback.
+    """
     import os
     import json
     import urllib.request
-    import urllib.parse
-    from pathlib import Path
     from ..config import load_env_vars
 
     load_env_vars()
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-    openai_key = os.environ.get("OPENAI_API_KEY")
-
-    if not anthropic_key and not openai_key:
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
         return {}
+
+    model = os.environ.get("OPENROUTER_VISION_MODEL") or OPENROUTER_DEFAULT_MODEL
+    payload = {
+        "model": model,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    try:
+        req = urllib.request.Request(
+            OPENROUTER_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            response_data = json.loads(resp.read().decode("utf-8"))
+
+        content_text = response_data["choices"][0]["message"]["content"]
+        # Look for a JSON block in case the model wrapped it in markdown
+        match = re.search(r"\{.*\}", content_text, re.DOTALL)
+        return json.loads(match.group(0)) if match else json.loads(content_text)
+    except Exception as e:
+        print(f"[MCP Bridge] OpenRouter LLM request failed: {e}")
+        return {}
+
+
+_REORG_LEVEL_RENAME_NOTE = {
+    "LIGHT": (
+        "Level: LIGHT -- be conservative. Only rename names that are clearly generic, garbled, or "
+        "exporter-mangled (hashes, GUIDs, 'Cube.003', 'mesh_7'). Leave names alone if they already look "
+        "intentional or descriptive."
+    ),
+    "STANDARD": "",
+    "DEEP": (
+        "Level: DEEP -- be thorough. Rename as many names as you reasonably can into clean, specific, "
+        "semantic terms, even ones that already look partially reasonable, so the whole hierarchy reads "
+        "consistently."
+    ),
+}
+
+
+def _call_llm_rename(
+    objects_info: list[dict], lang: str, custom_prompt: str = "", reorg_level: str = "STANDARD"
+) -> dict[str, str]:
+    """Semantically translate/organize object names via OpenRouter."""
+    import json
 
     system_prompt = (
         "You are an expert 3D model semantic organizer and translator. "
@@ -254,65 +318,17 @@ def _call_llm_rename(objects_info: list[dict], lang: str) -> dict[str, str]:
         "You MUST return ONLY a JSON object mapping the exact old names to the proposed new names: "
         '{"old_name": "NewName", "another_old_name": "AnotherNewName"}'
     )
+    level_note = _REORG_LEVEL_RENAME_NOTE.get(reorg_level, "")
+    if level_note:
+        system_prompt += " " + level_note
 
     user_content = f"Here is the list of objects in the hierarchy:\n{json.dumps(objects_info, indent=2)}"
-
-    headers = {"Content-Type": "application/json"}
-    
-    # Try Anthropic Claude first
-    if anthropic_key:
-        url = "https://api.anthropic.com/v1/messages"
-        headers.update({
-            "x-api-key": anthropic_key,
-            "anthropic-version": "2023-06-01"
-        })
-        payload = {
-            "model": "claude-3-5-sonnet-20241022",
-            "max_tokens": 4096,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_content}]
-        }
-    # Fallback to OpenAI GPT-4o
-    elif openai_key:
-        url = "https://api.openai.com/v1/chat/completions"
-        headers.update({
-            "Authorization": f"Bearer {openai_key}"
-        })
-        payload = {
-            "model": "gpt-4o",
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ]
-        }
-    else:
-        return {}
-
-    try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST"
+    if custom_prompt.strip():
+        user_content += (
+            "\n\nAdditional instructions from the user (follow these carefully, they take priority over "
+            f"the generic guidance above): {custom_prompt.strip()}"
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            response_data = json.loads(resp.read().decode("utf-8"))
-
-        if anthropic_key:
-            content_text = response_data["content"][0]["text"]
-        else:
-            content_text = response_data["choices"][0]["message"]["content"]
-
-        # Parse JSON output from LLM
-        # Look for JSON block in case Claude wrapped it in markdown
-        match = re.search(r"\{.*\}", content_text, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        return json.loads(content_text)
-    except Exception as e:
-        print(f"[MCP Bridge] LLM renaming request failed: {e}")
-        return {}
+    return _call_openrouter_json(system_prompt, user_content)
 
 
 
@@ -453,6 +469,21 @@ def _regen_collection(collection: bpy.types.Collection, vocab: dict, rename_obje
     }
 
 
+def _collect_renamed_pairs(report: dict) -> list[dict]:
+    """Flatten a _regen_collection report tree into a flat old->new list,
+    for a UI that wants a simple confirmation list rather than the nested
+    collection/object tree."""
+    pairs = []
+    if report.get("renamed"):
+        pairs.append({"old": report["old_name"], "new": report["new_name"]})
+    for obj_rep in report.get("objects", []):
+        if obj_rep.get("renamed"):
+            pairs.append({"old": obj_rep["old_name"], "new": obj_rep["new_name"]})
+    for child in report.get("children", []):
+        pairs.extend(_collect_renamed_pairs(child))
+    return pairs
+
+
 class RegenElementNamesTool(ToolBase):
     name = "regen_element_names"
     description = (
@@ -474,6 +505,8 @@ class RegenElementNamesTool(ToolBase):
         target_objects = params.get("objects")
         rename_meshes = bool(params.get("rename_meshes", True))
         use_llm = bool(params.get("use_llm", False))
+        custom_prompt = str(params.get("custom_prompt") or "")
+        reorg_level = str(params.get("reorg_level") or "STANDARD").strip().upper()
 
         # Collect target objects
         objects_to_rename = []
@@ -527,7 +560,7 @@ class RegenElementNamesTool(ToolBase):
                 })
 
             if objects_info:
-                mapping = _call_llm_rename(objects_info, lang)
+                mapping = _call_llm_rename(objects_info, lang, custom_prompt=custom_prompt, reorg_level=reorg_level)
                 if mapping:
                     llm_success = True
                     renamed_objs = []
@@ -557,6 +590,10 @@ class RegenElementNamesTool(ToolBase):
                             "parent": obj.parent.name if obj.parent else None,
                         })
 
+                    obj_pairs = [
+                        {"old": r["old_name"], "new": r["new_name"]} for r in renamed_objs if r["renamed"]
+                    ]
+
                     if not is_selection and not is_single_obj and root_col:
                         report = _regen_collection(root_col, vocab, rename_objects=False)
                         return {
@@ -565,6 +602,7 @@ class RegenElementNamesTool(ToolBase):
                             "lang": lang,
                             "objects": renamed_objs,
                             "root": report,
+                            "renamed_pairs": obj_pairs + _collect_renamed_pairs(report),
                         }
                     else:
                         msg = "selected object(s)" if is_selection else f"object hierarchy '{objects_to_rename[0].name}'"
@@ -574,9 +612,17 @@ class RegenElementNamesTool(ToolBase):
                             "message": f"Regenerated names using LLM for {msg} ({total_renamed} changed, lang={lang})",
                             "lang": lang,
                             "objects": renamed_objs,
+                            "renamed_pairs": obj_pairs,
                         }
 
         # Fallback to local dictionary translation
+        prompt_note = ""
+        if custom_prompt.strip() and not llm_success:
+            prompt_note = (
+                " (custom_prompt ignored -- enable Use LLM Semantics)" if not use_llm
+                else " (custom_prompt ignored -- LLM call unavailable/failed, check OPENROUTER_API_KEY)"
+            )
+
         if is_selection or is_single_obj:
             renamed_objs = []
             for obj in objects_to_rename:
@@ -586,47 +632,69 @@ class RegenElementNamesTool(ToolBase):
             msg = "selected object(s)" if is_selection else f"object hierarchy '{objects_to_rename[0].name}'"
             return {
                 "success": True,
-                "message": f"Regenerated names for {msg} ({total_renamed} changed, lang={lang})",
+                "message": f"Regenerated names for {msg} ({total_renamed} changed, lang={lang}){prompt_note}",
                 "lang": lang,
                 "objects": renamed_objs,
+                "renamed_pairs": [
+                    {"old": r["old_name"], "new": r["new_name"]} for r in renamed_objs if r["renamed"]
+                ],
             }
 
         report = _regen_collection(root_col, vocab, rename_objects=True)
         return {
             "success": True,
-            "message": f"Regenerated names for '{report['new_name']}' hierarchy (lang={lang})",
+            "message": f"Regenerated names for '{report['new_name']}' hierarchy (lang={lang}){prompt_note}",
             "lang": lang,
             "root": report,
+            "renamed_pairs": _collect_renamed_pairs(report),
         }
 
 
-def _call_llm_classify(parts_info: list[dict], lang: str) -> dict:
-    """Call OpenAI or Anthropic LLM to classify mesh loose parts into logical semantic groups."""
-    import os
+_REORG_LEVEL_CLASSIFY_NOTE = {
+    "LIGHT": (
+        "Level: LIGHT -- keep the breakdown coarse. Prefer fewer, larger sub-assemblies (aim for roughly "
+        "2-4 groups total) over lots of small ones."
+    ),
+    "STANDARD": "",
+    "DEEP": (
+        "Level: DEEP -- break the assembly down as finely as reasonable. Prefer more, smaller, more "
+        "specific sub-assemblies rather than a few broad ones."
+    ),
+}
+
+
+def _call_llm_classify(
+    parts_info: list[dict], lang: str, macro_name: str, custom_prompt: str = "", reorg_level: str = "STANDARD"
+) -> dict:
+    """Classify mesh loose parts into a macro/medium/micro grouping via OpenRouter.
+
+    macro_name is the whole assembly being separated (e.g. 'Door') -- already
+    the root Empty's name outside this call. This asks the LLM only for the
+    medium tier (logical sub-assemblies, e.g. 'Frame', 'Panel', 'Hardware')
+    and the micro tier (a clean name per individual part within its group).
+    """
     import json
-    import re
-    import urllib.request
-    import urllib.parse
-    from pathlib import Path
-    from ..config import load_env_vars
-
-    load_env_vars()
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-    openai_key = os.environ.get("OPENAI_API_KEY")
-
-    if not anthropic_key and not openai_key:
-        return {}
 
     system_prompt = (
         "You are an expert 3D model semantic analyzer. "
-        "Given a list of separated mesh parts from a model (each has an 'index', 'name', 'center' coordinates [X, Y, Z], and 'materials' list), "
-        "your job is to analyze their names, materials, and spatial positions to organize them into logical groups. "
-        f"For example, if it's a car, group parts into 'Ruote' (Wheels), 'Portiere' (Doors), 'Vetri' (Glass), 'Scocca' (Chassis), 'Interni' (Interior), etc. "
-        f"If it's a human body, group them into 'Testa' (Head), 'Braccio Sinistro' (Left Arm), 'Braccio Destro' (Right Arm), 'Gambe' (Legs), 'Busto' (Torso), etc. "
-        f"Translate group and part names into '{lang}'. "
+        "Given a list of separated mesh parts belonging to a single assembly "
+        f"called '{macro_name}' (each part has an 'index', 'name', 'center' coordinates [X, Y, Z], and "
+        "'materials' list), organize them into a two-level breakdown: "
+        "medium-level functional sub-assemblies (intermediate groups), each containing "
+        "micro-level individual parts. "
+        "Use spatial position (nearby centers likely belong to the same sub-assembly) and material "
+        "as strong signals, not just material alone -- e.g. for a door, group into sub-assemblies like "
+        "'Telaio' (Frame), 'Pannello' (Panel), 'Ferramenta' (Hardware/hinges/handle), not one giant group "
+        "per material. "
+        f"For a car: 'Ruote' (Wheels), 'Portiere' (Doors), 'Vetri' (Glass), 'Scocca' (Chassis), 'Interni' (Interior). "
+        f"For a human body: 'Testa' (Head), 'Braccio Sinistro' (Left Arm), 'Braccio Destro' (Right Arm), 'Gambe' (Legs), 'Busto' (Torso). "
+        f"Translate every group and part name into '{lang}'. "
+        "Every part index in the input MUST appear in exactly one group in the output -- never drop or "
+        "duplicate an index, and avoid a single group swallowing more than half the parts unless the "
+        "geometry genuinely has only one distinct area. "
         "Propose: "
-        "1. A mapping of logical group names (e.g. 'Ruote', 'Portiere') to the list of part indices that belong to them. "
-        "2. A mapping of each part index to a clean, semantic name (e.g. 'Ruota Anteriore Sinistra', 'Portiera Destra'). "
+        "1. A mapping of medium-level group names (e.g. 'Telaio', 'Ferramenta') to the list of part indices that belong to them. "
+        "2. A mapping of each part index to a clean, specific micro-level name (e.g. 'Cerniera Superiore', 'Maniglia'). "
         "You MUST return ONLY a JSON object of this structure (no markdown wrapper, just raw JSON):\n"
         "{\n"
         "  \"groups\": {\n"
@@ -642,69 +710,116 @@ def _call_llm_classify(parts_info: list[dict], lang: str) -> dict:
         "  }\n"
         "}"
     )
+    level_note = _REORG_LEVEL_CLASSIFY_NOTE.get(reorg_level, "")
+    if level_note:
+        system_prompt += " " + level_note
 
     user_content = f"Here is the list of parts to classify:\n{json.dumps(parts_info, indent=2)}"
-
-    headers = {"Content-Type": "application/json"}
-    
-    if anthropic_key:
-        url = "https://api.anthropic.com/v1/messages"
-        headers.update({
-            "x-api-key": anthropic_key,
-            "anthropic-version": "2023-06-01"
-        })
-        payload = {
-            "model": "claude-3-5-sonnet-20241022",
-            "max_tokens": 4096,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_content}]
-        }
-    elif openai_key:
-        url = "https://api.openai.com/v1/chat/completions"
-        headers.update({
-            "Authorization": f"Bearer {openai_key}"
-        })
-        payload = {
-            "model": "gpt-4o",
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ]
-        }
-    else:
-        return {}
-
-    try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST"
+    if custom_prompt.strip():
+        user_content += (
+            "\n\nAdditional instructions from the user (follow these carefully, they take priority over "
+            f"the generic guidance above): {custom_prompt.strip()}"
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            response_data = json.loads(resp.read().decode("utf-8"))
+    return _call_openrouter_json(system_prompt, user_content)
 
-        if anthropic_key:
-            content_text = response_data["content"][0]["text"]
-        else:
-            content_text = response_data["choices"][0]["message"]["content"]
 
-        match = re.search(r"\{.*\}", content_text, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-        return json.loads(content_text)
-    except Exception as e:
-        print(f"[MCP Bridge] LLM classification request failed: {e}")
-        return {}
+def _duplicate_and_combine(target_objs: list, anchor_obj, original_name: str):
+    """Duplicate every target object and, when more than one was selected,
+    join the duplicates into a single working mesh.
+
+    "Separate logical areas" on a multi-object selection (e.g. several
+    already-separate door parts) should treat the whole selection as one
+    assembly to break down, not silently process only whichever object
+    happened to be active and ignore the rest.
+    """
+    bpy.ops.object.select_all(action='DESELECT')
+    for o in target_objs:
+        o.select_set(True)
+    bpy.context.view_layer.objects.active = anchor_obj
+    bpy.ops.object.duplicate()
+    if len(target_objs) > 1:
+        bpy.ops.object.join()
+    dup_obj = bpy.context.active_object
+    dup_obj.name = f"{original_name}_separate_temp"
+    return dup_obj
+
+
+def _cluster_by_proximity(parts_info: list[dict], threshold_ratio: float = 0.18) -> list[list[int]]:
+    """Union-find spatial clustering of part centers, used by the no-LLM
+    heuristic fallback. Grouping purely by material (the old fallback) dumps
+    every part sharing a material -- e.g. every wooden part across an entire
+    door -- into one meaningless blob; clustering by proximity first at
+    least approximates distinct physical sub-assemblies."""
+    import math
+
+    n = len(parts_info)
+    if n == 0:
+        return []
+    centers = [tuple(p["center"]) for p in parts_info]
+    xs, ys, zs = (c[0] for c in centers), (c[1] for c in centers), (c[2] for c in centers)
+    diag = math.dist((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
+    threshold = max(diag * threshold_ratio, 1e-6)
+
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if math.dist(centers[i], centers[j]) <= threshold:
+                union(i, j)
+
+    clusters: dict[int, list[int]] = {}
+    for i in range(n):
+        clusters.setdefault(find(i), []).append(i)
+    return list(clusters.values())
+
+
+_REORG_LEVEL_THRESHOLD_RATIO = {
+    "LIGHT": 0.32,      # bigger clusters -> fewer, coarser groups
+    "STANDARD": 0.18,
+    "DEEP": 0.08,       # smaller clusters -> more, finer-grained groups
+}
+
+
+def _heuristic_classify(parts_info: list[dict], original_name: str, reorg_level: str = "STANDARD") -> dict:
+    """No-LLM fallback (OPENROUTER_API_KEY not set): cluster parts spatially
+    into medium-level groups first, then label each group by its dominant
+    material for at least some semantic signal, and give each part a
+    group-scoped name instead of a bare running index. reorg_level tunes the
+    clustering threshold since it's the only lever that still works without
+    an LLM -- custom_prompt has no effect here."""
+    threshold_ratio = _REORG_LEVEL_THRESHOLD_RATIO.get(reorg_level, _REORG_LEVEL_THRESHOLD_RATIO["STANDARD"])
+    clusters = _cluster_by_proximity(parts_info, threshold_ratio=threshold_ratio)
+    groups: dict[str, list[int]] = {}
+    names: dict[str, str] = {}
+    for c_idx, indices in enumerate(sorted(clusters, key=len, reverse=True), start=1):
+        mats = [parts_info[i]["materials"][0] for i in indices if parts_info[i]["materials"]]
+        label = mats[0] if mats else "Area"
+        group_name = f"{original_name}_{label}_{c_idx}"
+        groups[group_name] = indices
+        for local_idx, i in enumerate(indices, start=1):
+            names[str(i)] = f"{group_name}_Part{local_idx}"
+    return {"groups": groups, "names": names}
 
 
 class SeparateLogicalAreasTool(ToolBase):
     name = "separate_logical_areas"
     description = (
-        "Analyze the selected mesh, separate it into logical parts (by connectivity or materials), "
-        "use an LLM to classify and rename them semantically (e.g. wheels, doors, body, head, arms), "
-        "and organize them under parent Empties in a clean hierarchy."
+        "Analyze the selected mesh(es) -- combining multiple selected objects into one working mesh "
+        "first -- separate it into logical parts (by connectivity or materials), use an LLM to classify "
+        "and rename them into medium-level sub-assemblies and micro-level parts (e.g. Frame/Panel/Hardware "
+        "for a door, not one giant per-material blob), and organize them under parent Empties in a clean "
+        "macro (whole assembly) / medium (sub-assembly) / micro (part) hierarchy."
     )
 
     def execute(self, params: dict) -> dict:
@@ -713,23 +828,25 @@ class SeparateLogicalAreasTool(ToolBase):
         if vocab is None:
             vocab = CATEGORY_TRANSLATIONS["it"]
 
+        custom_prompt = str(params.get("custom_prompt") or "")
+        reorg_level = str(params.get("reorg_level") or "STANDARD").strip().upper()
+
+        target_objs = [o for o in bpy.context.selected_objects if o.type == "MESH"]
         active_obj = bpy.context.active_object
-        if not active_obj or active_obj.type != "MESH":
-            return {"success": False, "message": "Please select a MESH object in the 3D viewport first."}
+        if not target_objs:
+            if active_obj and active_obj.type == "MESH":
+                target_objs = [active_obj]
+            else:
+                return {"success": False, "message": "Please select at least one MESH object in the 3D viewport first."}
 
-        original_name = active_obj.name
-        original_collection = active_obj.users_collection[0] if active_obj.users_collection else bpy.context.scene.collection
+        anchor_obj = active_obj if active_obj in target_objs else target_objs[0]
+        original_name = anchor_obj.name
+        original_collection = anchor_obj.users_collection[0] if anchor_obj.users_collection else bpy.context.scene.collection
+        combined_count = len(target_objs)
 
-        # Save existing objects set to track changes
+        # Step 1: Duplicate (and combine, if more than one object selected)
         existing_objs = set(bpy.data.objects.keys())
-
-        # Step 1: Duplicate the active object
-        bpy.ops.object.select_all(action='DESELECT')
-        active_obj.select_set(True)
-        bpy.context.view_layer.objects.active = active_obj
-        bpy.ops.object.duplicate()
-        dup_obj = bpy.context.active_object
-        dup_obj.name = f"{original_name}_separate_temp"
+        dup_obj = _duplicate_and_combine(target_objs, anchor_obj, original_name)
 
         # Step 2: Try separating by loose parts first
         bpy.ops.object.mode_set(mode='EDIT')
@@ -743,20 +860,15 @@ class SeparateLogicalAreasTool(ToolBase):
         if len(separated_pieces) <= 1:
             for obj in separated_pieces:
                 bpy.data.objects.remove(obj, do_unlink=True)
-            
-            bpy.ops.object.select_all(action='DESELECT')
-            active_obj.select_set(True)
-            bpy.context.view_layer.objects.active = active_obj
-            
+
             existing_objs = set(bpy.data.objects.keys())
-            
-            bpy.ops.object.duplicate()
-            
+            dup_obj = _duplicate_and_combine(target_objs, anchor_obj, original_name)
+
             bpy.ops.object.mode_set(mode='EDIT')
             bpy.ops.mesh.select_all(action='SELECT')
             bpy.ops.mesh.separate(type='MATERIAL')
             bpy.ops.object.mode_set(mode='OBJECT')
-            
+
             separated_pieces = [obj for name, obj in bpy.data.objects.items() if name not in existing_objs]
 
         if not separated_pieces:
@@ -772,27 +884,24 @@ class SeparateLogicalAreasTool(ToolBase):
                 "materials": [mat.name for mat in obj.data.materials if mat]
             })
 
-        # Step 4: Call LLM to classify and map names
-        classification = _call_llm_classify(parts_info, lang)
-        
-        # Fallback if LLM classification is empty
-        if not classification or "groups" not in classification or "names" not in classification:
-            classification = {"groups": {}, "names": {}}
-            for idx, p in enumerate(parts_info):
-                mat_name = p["materials"][0] if p["materials"] else "Materiale_Generico"
-                if mat_name not in classification["groups"]:
-                    classification["groups"][mat_name] = []
-                classification["groups"][mat_name].append(idx)
-                classification["names"][str(idx)] = f"{original_name}_part_{idx}"
+        # Step 4: Call LLM to classify into medium groups + micro names
+        classification = _call_llm_classify(
+            parts_info, lang, original_name, custom_prompt=custom_prompt, reorg_level=reorg_level
+        )
+        used_llm = bool(classification and "groups" in classification and "names" in classification)
 
-        # Step 5: Rename and organize under a root Empty
+        # Fallback if LLM classification is empty/unavailable (no OPENROUTER_API_KEY)
+        if not used_llm:
+            classification = _heuristic_classify(parts_info, original_name, reorg_level=reorg_level)
+
+        # Step 5: Rename and organize under a root Empty (macro tier)
         bpy.ops.object.select_all(action='DESELECT')
-        
+
         root_empty_name = f"{original_name}_Organizzato" if lang == "it" else f"{original_name}_Organized"
-        bpy.ops.object.empty_add(type='PLAIN_AXES', location=active_obj.location)
+        bpy.ops.object.empty_add(type='PLAIN_AXES', location=anchor_obj.location)
         root_empty = bpy.context.active_object
         root_empty.name = root_empty_name
-        
+
         if root_empty.name not in original_collection.objects:
             original_collection.objects.link(root_empty)
         if original_collection != bpy.context.scene.collection:
@@ -807,11 +916,12 @@ class SeparateLogicalAreasTool(ToolBase):
 
         report_groups = []
         for group_name, indices in groups.items():
-            bpy.ops.object.empty_add(type='PLAIN_AXES', location=active_obj.location)
+            # Medium tier: one Empty per logical sub-assembly
+            bpy.ops.object.empty_add(type='PLAIN_AXES', location=anchor_obj.location)
             group_empty = bpy.context.active_object
             group_empty.name = group_name
             group_empty.parent = root_empty
-            
+
             if group_empty.name not in original_collection.objects:
                 original_collection.objects.link(group_empty)
             if original_collection != bpy.context.scene.collection:
@@ -825,7 +935,8 @@ class SeparateLogicalAreasTool(ToolBase):
             for idx in indices:
                 try:
                     obj_idx = int(idx)
-                    if obj_idx < len(separated_pieces):
+                    if 0 <= obj_idx < len(separated_pieces):
+                        # Micro tier: the individual named part
                         piece_obj = separated_pieces[obj_idx]
                         new_name = names.get(str(idx), f"Part_{idx}")
                         piece_obj.name = new_name
@@ -840,12 +951,23 @@ class SeparateLogicalAreasTool(ToolBase):
                 "parts": group_pieces
             })
 
-        active_obj.hide_viewport = True
-        active_obj.hide_render = True
+        for obj in target_objs:
+            obj.hide_viewport = True
+            obj.hide_render = True
 
+        combined_note = f" (combined from {combined_count} selected objects)" if combined_count > 1 else ""
+        classifier_note = "LLM" if used_llm else "heuristic spatial clustering (set OPENROUTER_API_KEY for smarter classification)"
+        prompt_note = ""
+        if custom_prompt.strip() and not used_llm:
+            prompt_note = " Custom instructions were ignored -- they only apply when OPENROUTER_API_KEY is configured."
         return {
             "success": True,
-            "message": f"Successfully separated '{original_name}' into {len(separated_pieces)} parts across {len(groups)} logical groups.",
+            "message": (
+                f"Successfully separated '{original_name}'{combined_note} into {len(separated_pieces)} parts "
+                f"across {len(groups)} logical groups (classified via {classifier_note})."
+                f"{prompt_note}"
+            ),
             "root_object": root_empty.name,
+            "used_llm": used_llm,
             "groups": report_groups
         }

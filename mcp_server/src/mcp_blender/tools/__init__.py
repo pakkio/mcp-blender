@@ -154,7 +154,7 @@ REGISTER_FUNCS = (
     register_bridge_status_tools,
     # --- 2.0.6 Additions: Localized structural renaming ---
     register_localization_tools,
-    # --- 2.0.6 Additions: Masked venv/env disclosure ---
+    # --- 2.0.27 Additions: Masked venv/env disclosure ---
     register_env_info_tools,
 )
 

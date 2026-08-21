@@ -1,4 +1,4 @@
-# mcp-blender (v2.0.27)
+# mcp-blender (v2.0.28)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender` (v2.0.27) |
+| Capability | Generic Blender MCPs | `mcp-blender` (v2.0.28) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **138 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -262,11 +262,11 @@ The unified `.env` loader (v2.0.17) reads these. Each is only needed for the pro
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge-2.0.27.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge-2.0.28.zip
 ```
 
 3. In Blender 4.2+, open **Preferences > Get Extensions > Install from Disk...**,
-   select `dist/mcp_bridge-2.0.27.zip`, and enable **MCP Bridge**.
+   select `dist/mcp_bridge-2.0.28.zip`, and enable **MCP Bridge**.
 
 ### 2. Install the MCP Server
 

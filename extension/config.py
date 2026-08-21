@@ -47,24 +47,42 @@ def write_settings(host: str, port: int) -> None:
     path.write_text(json.dumps({"host": host, "port": port}, indent=2))
 
 
-def load_env_vars() -> None:
-    """Load keys from .env files into os.environ if not already present."""
-    candidates = [
+def env_file_candidates() -> list[Path]:
+    """.env search path, in precedence order (first hit wins per key)."""
+    return [
         Path.home() / ".mcp-blender" / ".env",
         Path.home() / ".env",
         Path.cwd() / ".env",
         Path(__file__).resolve().parent.parent / ".env",
     ]
-    for candidate in candidates:
+
+
+def parse_env_text(text: str) -> dict[str, str]:
+    """Parse simple KEY=VALUE lines from .env file text into a dict.
+
+    Shared by load_env_vars (which applies these to os.environ) and
+    env_info_ops (which reports them without mutating os.environ), so the
+    two stay in sync automatically.
+    """
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"\'')
+            if k:
+                values[k] = v
+    return values
+
+
+def load_env_vars() -> None:
+    """Load keys from .env files into os.environ if not already present."""
+    for candidate in env_file_candidates():
         if candidate.is_file():
             try:
-                for line in candidate.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        k = k.strip()
-                        v = v.strip().strip('"\'')
-                        if k and k not in os.environ:
-                            os.environ[k] = v
+                for k, v in parse_env_text(candidate.read_text(encoding="utf-8")).items():
+                    if k not in os.environ:
+                        os.environ[k] = v
             except Exception:
                 pass

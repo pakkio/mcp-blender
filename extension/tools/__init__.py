@@ -45,6 +45,7 @@ from .curve_wire_ops import (
 )
 from .delete_object import DeleteObjectTool
 from .duplicate_object import DuplicateObjectTool
+from .env_info_ops import GetEnvInfoTool
 from .execute_python import ExecuteBlenderPythonTool
 from .geometry_nodes_ops import (
     BakeGeometryNodesTool,
@@ -329,6 +330,8 @@ ALL_TOOLS = (
     # --- 2.0.7 Additions: Super import with auto simplification & budget ---
     SuperImportTool(),
     NormalizeModelTool(),
+    # --- 2.0.27 Additions: Masked venv/env disclosure ---
+    GetEnvInfoTool(),
 )
 
 TOOL_REGISTRY = {tool.name: tool for tool in ALL_TOOLS}
