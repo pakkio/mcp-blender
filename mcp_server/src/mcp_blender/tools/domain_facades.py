@@ -16,6 +16,7 @@ import json
 from ..errors import BridgeError, ErrorType
 from .asset_source_ops import register_asset_source_tools
 from .bridge_status_ops import register_bridge_status_tools
+from .env_info_ops import register_env_info_tools
 from .execute_python import register_execute_blender_python_tool
 from .localization_ops import register_localization_tools
 from .simplify_geometry_ops import register_simplify_geometry_tools
@@ -589,3 +590,8 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
 
     # 10. Direct Python execution escape hatch
     register_execute_blender_python_tool(mcp, bridge)
+
+    # Kept standalone in both modes: masked venv/env disclosure is a cheap,
+    # bridge-free diagnostic the LLM needs before asset-generation or vision
+    # calls, regardless of how aggressively the other tools are consolidated.
+    register_env_info_tools(mcp, bridge)

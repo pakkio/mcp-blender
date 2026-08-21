@@ -52,6 +52,7 @@ async def test_domain_facades_registration_and_dispatch():
     assert "blender_physics_sim" in registered_names
     assert "blender_render_pipeline" in registered_names
     assert "execute_blender_python" in registered_names
+    assert "get_env_info" in registered_names
 
     # Test blender_docs
     docs_tool = mcp.tools["blender_docs"]

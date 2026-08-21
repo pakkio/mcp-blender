@@ -24,6 +24,7 @@ from .create_object import register_create_object_tool
 from .curve_wire_ops import register_curve_wire_tools
 from .delete_object import register_delete_object_tool
 from .duplicate_object import register_duplicate_object_tool
+from .env_info_ops import register_env_info_tools
 from .execute_python import register_execute_blender_python_tool
 from .geometry_nodes_ops import register_geometry_nodes_tools
 from .get_object_info import register_get_object_info_tool
@@ -153,6 +154,8 @@ REGISTER_FUNCS = (
     register_bridge_status_tools,
     # --- 2.0.6 Additions: Localized structural renaming ---
     register_localization_tools,
+    # --- 2.0.6 Additions: Masked venv/env disclosure ---
+    register_env_info_tools,
 )
 
 

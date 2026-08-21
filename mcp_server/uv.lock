@@ -465,7 +465,7 @@ wheels = [
 
 [[package]]
 name = "mcp-blender"
-version = "2.0.26"
+version = "2.0.27"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
