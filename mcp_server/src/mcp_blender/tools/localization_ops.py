@@ -19,25 +19,31 @@ from ..vlm import VLMError, critique_image, extract_png_bytes, is_configured
 # only used to turn a lang code into a display name for the vision prompt.
 LANG_DISPLAY_NAMES = {"it": "Italian", "en": "English"}
 
-_DEFAULT_MAX_VISION_RENAMES = 15
+_DEFAULT_MAX_VISION_RENAMES = 9999
 
 
 class RegenNamesParams(BaseModel):
     lang: str = "it"
     element: Optional[str] = None
     use_vision: bool = False
-    max_vision_renames: int = Field(default=_DEFAULT_MAX_VISION_RENAMES, ge=0, le=100)
+    max_vision_renames: int = Field(default=_DEFAULT_MAX_VISION_RENAMES, ge=0, le=9999)
     vision_model: Optional[str] = None
+    vision_only_generic: bool = False
 
 
 def _collect_mesh_objects(node: dict) -> list[dict]:
-    """Flatten the regen_element_names report tree into every MESH leaf,
-    each carrying its category (immediate parent collection's new_name) for
-    vision-prompt context."""
+    """Flatten the regen_element_names report tree into every MESH leaf, each
+    carrying its category (immediate parent collection's new_name) for
+    vision-prompt context, and whether the structural/LLM pass already
+    renamed it (used to filter down to still-generic leaves)."""
     found = []
     for obj in node.get("objects", []):
         if obj.get("type") == "MESH":
-            found.append({"name": obj["new_name"], "category": node.get("new_name")})
+            found.append({
+                "name": obj["new_name"],
+                "category": node.get("new_name"),
+                "renamed": bool(obj.get("renamed", False)),
+            })
     for child in node.get("children", []):
         found.extend(_collect_mesh_objects(child))
     return found
@@ -55,7 +61,7 @@ def _mesh_candidates(structural: dict) -> list[dict]:
     if root:
         return _collect_mesh_objects(root)
     return [
-        {"name": obj["new_name"], "category": None}
+        {"name": obj["new_name"], "category": None, "renamed": bool(obj.get("renamed", False))}
         for obj in structural.get("objects", [])
         if obj.get("type") == "MESH"
     ]
@@ -82,7 +88,9 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
             "looking at each one and asking a vision model for its semantic role within its category -- not "
             "a shape description ('cube', 'cylinder'), a real part name ('seat', 'leg', 'wheel'). Requires "
             "OPENROUTER_API_KEY; without it, use_vision is silently skipped and only the structural pass runs. "
-            "Capped at max_vision_renames (default 15) objects per call to bound cost/time."
+            "Capped at max_vision_renames (default 9999) objects per call to bound cost/time. Pass "
+            "vision_only_generic=true to restrict the vision pass to leaves the structural pass left "
+            "untouched instead of re-naming every mesh."
         ),
     )
     async def regen_names(
@@ -91,6 +99,7 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
         use_vision: bool = False,
         max_vision_renames: int = _DEFAULT_MAX_VISION_RENAMES,
         vision_model: Optional[str] = None,
+        vision_only_generic: bool = False,
     ) -> dict:
         params = RegenNamesParams(
             lang=lang,
@@ -98,6 +107,7 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
             use_vision=use_vision,
             max_vision_renames=max_vision_renames,
             vision_model=vision_model,
+            vision_only_generic=vision_only_generic,
         )
 
         structural = await bridge.send_request(
@@ -115,7 +125,10 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
                 vision_note = "use_vision requested but OPENROUTER_API_KEY is not set -- structural pass only."
             else:
                 lang_name = LANG_DISPLAY_NAMES.get(params.lang, params.lang)
-                candidates = _mesh_candidates(structural)[: params.max_vision_renames]
+                candidates = _mesh_candidates(structural)
+                if params.vision_only_generic:
+                    candidates = [c for c in candidates if not c.get("renamed")]
+                candidates = candidates[: params.max_vision_renames]
                 async with client_status.track(bridge, f"Naming objects visually ({lang_name})...") as set_status:
                     for i, candidate in enumerate(candidates, 1):
                         obj_name = candidate["name"]

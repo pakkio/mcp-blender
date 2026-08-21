@@ -418,7 +418,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
                 lang=p.get("lang", "it"),
                 element=p.get("element"),
                 use_vision=p.get("use_vision", False),
-                max_vision_renames=p.get("max_vision_renames", 15),
+                max_vision_renames=p.get("max_vision_renames", 9999),
                 vision_model=p.get("vision_model"),
             )
         method_map = {

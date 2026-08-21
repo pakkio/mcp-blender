@@ -11,7 +11,7 @@ is the entire lifecycle surface that matters.
 bl_info = {
     "name": "MCP Bridge",
     "author": "Claudio Pacchiega",
-    "version": (2, 0, 29),
+    "version": (2, 0, 34),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > MCP Bridge",
     "description": "WebSocket bridge exposing Blender to MCP clients like Claude",
@@ -39,6 +39,12 @@ except ImportError:
 import bpy
 
 ADDON_PACKAGE = __package__
+
+# If reloading within an existing Blender session, clear stale cached submodules
+# so Python imports fresh definitions instead of holding onto outdated module objects.
+for mod_name in list(sys.modules.keys()):
+    if (ADDON_PACKAGE and mod_name.startswith(ADDON_PACKAGE + ".")) or mod_name.startswith(__name__ + "."):
+        sys.modules.pop(mod_name, None)
 
 from . import config  # noqa: E402
 from .bridge import dispatch, start_server, stop_server  # noqa: E402

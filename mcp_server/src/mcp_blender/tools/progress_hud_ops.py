@@ -15,6 +15,8 @@ class UpdateProgressHUDParams(BaseModel):
     details: list[str] = []
     show_hud: bool = True
     auto_hide_seconds: float = 0.0
+    completed_summary: str = ""
+    next_steps: list[str] = []
 
 
 class ClearProgressHUDParams(BaseModel):
@@ -24,7 +26,7 @@ class ClearProgressHUDParams(BaseModel):
 def register_progress_hud_tools(mcp: FastMCP, bridge: BlenderBridge):
     @mcp.tool(
         name="update_progress_hud",
-        description="Display or update a non-modal floating progress HUD card in Blender with progress percentage (0-100%), task title, status, and detailed step explanations without blocking user interaction.",
+        description="Display or update a non-modal floating progress HUD card in Blender with progress percentage (0-100%), task title, status, detailed step explanations, a completed-work summary, and suggested next steps, without blocking user interaction.",
     )
     async def update_progress_hud(
         title: str = "MCP Agent Task",
@@ -35,6 +37,8 @@ def register_progress_hud_tools(mcp: FastMCP, bridge: BlenderBridge):
         details: list[str] = [],
         show_hud: bool = True,
         auto_hide_seconds: float = 0.0,
+        completed_summary: str = "",
+        next_steps: list[str] = [],
     ) -> dict:
         params = UpdateProgressHUDParams(
             title=title,
@@ -45,6 +49,8 @@ def register_progress_hud_tools(mcp: FastMCP, bridge: BlenderBridge):
             details=details,
             show_hud=show_hud,
             auto_hide_seconds=auto_hide_seconds,
+            completed_summary=completed_summary,
+            next_steps=next_steps,
         )
         result = await bridge.send_request("update_progress_hud", params.model_dump())
         if not result.get("success"):

@@ -207,3 +207,42 @@ async def test_regen_names_respects_max_vision_renames_cap(monkeypatch):
     result = await handler(use_vision=True, max_vision_renames=2)
 
     assert len(result["vision_renames"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_regen_names_vision_only_generic_skips_already_renamed_leaves(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    tree = {
+        "old_name": "Scene Collection",
+        "new_name": "Scene Collection",
+        "renamed": False,
+        "objects_count": 0,
+        "is_empty_node": False,
+        "objects": [
+            {"old_name": "Wheel", "new_name": "Ruota", "type": "MESH", "renamed": True, "parent": None},
+            {"old_name": "Chair_Mesh", "new_name": "Chair_Mesh", "type": "MESH", "renamed": False, "parent": None},
+        ],
+        "children": [],
+    }
+    bridge = AsyncMock()
+
+    async def send_request(method, params, timeout=None):
+        if method == "regen_element_names":
+            return {"success": True, "message": "ok", "root": tree}
+        if method == "inspect_focus_shot":
+            return {"success": True, "image_base64": base64.b64encode(b"x").decode()}
+        if method == "set_object_properties":
+            return {"success": True, "name": params["new_name"]}
+        return {"success": True}
+
+    bridge.send_request.side_effect = send_request
+    handler = register_localization_tools(FakeMCP(), bridge)
+
+    async def fake_critique(question, png_bytes, model=None):
+        return {"critique": "Sedile", "model": "m", "prompt_tokens": 1, "completion_tokens": 1}
+
+    monkeypatch.setattr("mcp_blender.tools.localization_ops.critique_image", fake_critique)
+
+    result = await handler(use_vision=True, vision_only_generic=True)
+
+    assert result["vision_renames"] == [{"old_name": "Chair_Mesh", "new_name": "Sedile"}]

@@ -17,6 +17,8 @@ HUD_STATE = {
     "details": [],
     "last_update": 0.0,
     "auto_hide_time": 0.0,
+    "completed_summary": "",
+    "next_steps": [],
 }
 
 _DRAW_HANDLER = None
@@ -49,7 +51,13 @@ def _draw_hud_callback():
 
     # HUD Box dimensions (Top-Right Floating Glass Card)
     card_w = 360
-    card_h = 45 + max(1, len(HUD_STATE["details"])) * 18 + 30
+    details_shown = HUD_STATE["details"][-4:]
+    next_steps_shown = HUD_STATE["next_steps"][-3:]
+    card_h = 45 + max(1, len(details_shown)) * 18 + 30
+    if HUD_STATE["completed_summary"]:
+        card_h += 22
+    if next_steps_shown:
+        card_h += 18 + len(next_steps_shown) * 16
     x_max = width - 20
     x_min = x_max - card_w
     y_max = height - 50
@@ -130,11 +138,32 @@ def _draw_hud_callback():
     # Detailed Step History
     y_cursor = y_max - 80
     blf.size(font_id, 10)
-    for detail in HUD_STATE["details"][-4:]:  # Show last 4 details
+    for detail in details_shown:
         blf.color(font_id, 0.55, 0.65, 0.75, 0.95)
         blf.position(font_id, x_min + 20, y_cursor, 0)
         blf.draw(font_id, f"• {detail[:42]}")
         y_cursor -= 18
+
+    # Completed Summary (what was done) - Emerald accent
+    if HUD_STATE["completed_summary"]:
+        blf.size(font_id, 11)
+        blf.color(font_id, 0.35, 0.9, 0.55, 1.0)
+        blf.position(font_id, x_min + 15, y_cursor - 4, 0)
+        blf.draw(font_id, f"✔ Done: {HUD_STATE['completed_summary'][:45]}")
+        y_cursor -= 22
+
+    # Next Steps (what you can do next) - Amber accent
+    if next_steps_shown:
+        blf.size(font_id, 10)
+        blf.color(font_id, 0.95, 0.75, 0.3, 1.0)
+        blf.position(font_id, x_min + 15, y_cursor - 4, 0)
+        blf.draw(font_id, "Next steps:")
+        y_cursor -= 18
+        for step in next_steps_shown:
+            blf.color(font_id, 0.85, 0.8, 0.6, 0.95)
+            blf.position(font_id, x_min + 20, y_cursor, 0)
+            blf.draw(font_id, f"→ {step[:42]}")
+            y_cursor -= 16
 
 
 def _ensure_draw_handler():
@@ -154,13 +183,83 @@ def remove_draw_handler():
         _DRAW_HANDLER = None
 
 
+def push_hud_update(
+    title: str,
+    status: str,
+    progress_percent: float,
+    step_current: int = 0,
+    step_total: int = 0,
+    details=None,
+    completed_summary: str = "",
+    next_steps=None,
+    show_hud: bool = True,
+    auto_hide_seconds: float = 0.0,
+    force_redraw: bool = False,
+) -> None:
+    """Direct (non-JSON-tool) entry point other extension modules call to
+    drive the floating HUD from inside their own long-running loops.
+
+    A plain area.tag_redraw() only schedules a repaint for Blender's next
+    trip through its event loop -- fine for update_progress_hud's normal
+    callers (each a separate bridge round-trip from the external mcp_server
+    process, so control already returns to the event loop between calls) but
+    useless for a loop that runs entirely inside one Operator.execute() call
+    (e.g. RegenElementNamesTool's or SeparateLogicalAreasTool's vision-assist
+    pass): the event loop never runs until execute() itself returns, so nothing
+    would visibly update until the whole operation is already finished -- from
+    the user's perspective, indistinguishable from a frozen UI. force_redraw
+    additionally forces one real, immediate redraw+buffer-swap via
+    wm.redraw_timer so the HUD actually appears on screen mid-loop.
+    """
+    _ensure_draw_handler()
+
+    HUD_STATE["visible"] = show_hud
+    HUD_STATE["title"] = title
+    HUD_STATE["status"] = status
+    HUD_STATE["progress"] = progress_percent
+    HUD_STATE["step_current"] = step_current
+    HUD_STATE["step_total"] = step_total
+    HUD_STATE["last_update"] = time.time()
+    HUD_STATE["completed_summary"] = completed_summary
+
+    if isinstance(next_steps, list):
+        HUD_STATE["next_steps"] = next_steps
+    elif isinstance(next_steps, str) and next_steps:
+        HUD_STATE["next_steps"] = [next_steps]
+    elif next_steps is None:
+        pass
+    else:
+        HUD_STATE["next_steps"] = []
+
+    if isinstance(details, list):
+        HUD_STATE["details"] = details
+    elif isinstance(details, str):
+        HUD_STATE["details"].append(details)
+
+    if auto_hide_seconds > 0:
+        HUD_STATE["auto_hide_time"] = time.time() + auto_hide_seconds
+    elif progress_percent >= 100.0:
+        HUD_STATE["auto_hide_time"] = time.time() + 6.0
+    else:
+        HUD_STATE["auto_hide_time"] = 0.0
+
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type == "VIEW_3D":
+                area.tag_redraw()
+
+    if force_redraw:
+        try:
+            bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+        except Exception:
+            pass
+
+
 class UpdateProgressHUDTool(ToolBase):
     name = "update_progress_hud"
-    description = "Display or update a non-modal floating progress HUD card in Blender with progress percentage (0-100%), task title, status, and detailed step explanations without blocking user interaction."
+    description = "Display or update a non-modal floating progress HUD card in Blender with progress percentage (0-100%), task title, status, detailed step explanations, a completed-work summary, and suggested next steps, without blocking user interaction."
 
     def execute(self, params: dict) -> dict:
-        _ensure_draw_handler()
-
         title = params.get("title", "MCP Task")
         status = params.get("status", "Working...")
         progress = float(params.get("progress_percent", 0.0))
@@ -169,32 +268,22 @@ class UpdateProgressHUDTool(ToolBase):
         details = params.get("details", [])
         show_hud = bool(params.get("show_hud", True))
         auto_hide_seconds = float(params.get("auto_hide_seconds", 0.0))
+        completed_summary = params.get("completed_summary", "")
+        next_steps = params.get("next_steps", [])
 
-        HUD_STATE["visible"] = show_hud
-        HUD_STATE["title"] = title
-        HUD_STATE["status"] = status
-        HUD_STATE["progress"] = progress
-        HUD_STATE["step_current"] = step_current
-        HUD_STATE["step_total"] = step_total
-        HUD_STATE["last_update"] = time.time()
-
-        if isinstance(details, list):
-            HUD_STATE["details"] = details
-        elif isinstance(details, str):
-            HUD_STATE["details"].append(details)
-
-        if auto_hide_seconds > 0:
-            HUD_STATE["auto_hide_time"] = time.time() + auto_hide_seconds
-        elif progress >= 100.0:
-            HUD_STATE["auto_hide_time"] = time.time() + 6.0
-        else:
-            HUD_STATE["auto_hide_time"] = 0.0
-
-        # Tag all viewports for redraw
-        for window in bpy.context.window_manager.windows:
-            for area in window.screen.areas:
-                if area.type == "VIEW_3D":
-                    area.tag_redraw()
+        push_hud_update(
+            title=title,
+            status=status,
+            progress_percent=progress,
+            step_current=step_current,
+            step_total=step_total,
+            details=details,
+            completed_summary=completed_summary,
+            next_steps=next_steps,
+            show_hud=show_hud,
+            auto_hide_seconds=auto_hide_seconds,
+            force_redraw=False,
+        )
 
         return {
             "success": True,
@@ -212,6 +301,8 @@ class ClearProgressHUDTool(ToolBase):
         HUD_STATE["visible"] = False
         HUD_STATE["details"] = []
         HUD_STATE["progress"] = 0.0
+        HUD_STATE["completed_summary"] = ""
+        HUD_STATE["next_steps"] = []
 
         for window in bpy.context.window_manager.windows:
             for area in window.screen.areas:

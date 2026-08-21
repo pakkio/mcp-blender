@@ -1,4 +1,4 @@
-# mcp-blender (v2.0.28)
+# mcp-blender (v2.0.34)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender` (v2.0.28) |
+| Capability | Generic Blender MCPs | `mcp-blender` (v2.0.34) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **138 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -80,7 +80,7 @@ Four tools stay standalone even in this low-context mode rather than folding int
 
 ### 1. Batch Execution & Non-Modal Progress HUD
 - **`execute_batch`**: Single-roundtrip multi-tool pipeline execution with stop-on-error/optional-step control and per-step output logging.
-- **`update_progress_hud`**: Floating 2D glass HUD card in 3D Viewport displaying live progress percentage ($0-100\%$), step counters, and detailed task history without blocking the user.
+- **`update_progress_hud`**: Floating 2D glass HUD card in 3D Viewport displaying live progress percentage ($0-100\%$), step counters, detailed task history, a completed-work summary, and suggested next steps, without blocking the user.
 - **`clear_progress_hud`**: Hides and resets the non-modal status HUD.
 
 ### 2. Shader Studio & Specialty Shaders
@@ -244,6 +244,14 @@ Earlier versions of `blender_docs` only searched a static dictionary of hardcode
 - **Custom AI Recipes**: If an `OPENROUTER_API_KEY` is configured in your `.env`, `blender_docs` now automatically calls OpenRouter/Gemini to generate a customized, step-by-step 3D workflow recipe tailored exactly to your query.
 - **Accurate Action Schemas**: The system compiles the complete action descriptions, tool names, and parameter specifications for all 10 domain facades and feeds them to the LLM, ensuring the generated steps use valid tools and parameters.
 
+### 30. Vision-Assisted Naming for Regenerate Names & Separate in Logical Areas (v2.0.30 → v2.0.34)
+The "Regenerate Names" and "Separate in Logical Areas" viewport panel buttons can now see the geometry they're naming, not just pattern-match names or classify by material/position.
+
+- **Vision-assisted mesh naming**: Both buttons gained a "Use Vision" option that captures a close-up render of each part and asks a vision model (via `OPENROUTER_API_KEY`) to name it by semantic role (e.g. 'leg', 'hinge') rather than shape -- capped by `max_vision_renames` (default 9999) to bound cost/time.
+- **"Only generic names" filter**: `vision_only_generic` restricts the vision pass to parts the earlier structural/LLM/heuristic pass left untouched or generically named (`Cube.003`, `Part_4`), instead of spending a render + API call re-naming every part.
+- **Separate in Logical Areas keeps every part visible** and renames the original source object(s) with a `.bak` suffix (hidden, not deleted) instead of just hiding them anonymously.
+- **Live progress instead of a frozen dialog**: since the vision pass runs inside one blocking button click, the floating progress HUD is now force-redrawn per part (`push_hud_update(..., force_redraw=True)`, via `wm.redraw_timer`) so you see per-part "i/total" progress and status text in real time instead of a greyed-out redo panel with no feedback until the whole pass finishes.
+
 ### Required credentials
 The unified `.env` loader (v2.0.17) reads these. Each is only needed for the provider you actually use:
 
@@ -262,11 +270,11 @@ The unified `.env` loader (v2.0.17) reads these. Each is only needed for the pro
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge-2.0.28.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge-2.0.34.zip
 ```
 
 3. In Blender 4.2+, open **Preferences > Get Extensions > Install from Disk...**,
-   select `dist/mcp_bridge-2.0.28.zip`, and enable **MCP Bridge**.
+   select `dist/mcp_bridge-2.0.34.zip`, and enable **MCP Bridge**.
 
 ### 2. Install the MCP Server
 

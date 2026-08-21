@@ -148,6 +148,34 @@ class MCP_OT_regen_names(bpy.types.Operator):
         default="",
     )
 
+    use_vision: bpy.props.BoolProperty(
+        name="Vision-Assisted Mesh Naming",
+        description=(
+            "After the structural/LLM pass, capture a close-up render of each remaining generic mesh "
+            "leaf (e.g. 'Chair_Mesh') and ask a vision model (via OPENROUTER_API_KEY in .env) to name it "
+            "by semantic role -- slower and one extra API call per mesh"
+        ),
+        default=False,
+    )
+
+    max_vision_renames: bpy.props.IntProperty(
+        name="Max Vision Renames",
+        description="Cap on how many mesh objects get a vision-assisted rename per run, to bound cost/time",
+        default=9999,
+        min=0,
+        max=9999,
+    )
+
+    vision_only_generic: bpy.props.BoolProperty(
+        name="Only Still-Generic Names",
+        description=(
+            "Only run the vision pass on mesh leaves the structural/LLM pass left untouched "
+            "(still-generic exporter names like 'Cube.003', or names with no vocabulary match like "
+            "'Chair_Mesh') instead of re-naming every mesh -- fewer renders/API calls"
+        ),
+        default=True,
+    )
+
     def invoke(self, context, event):
         # Default scope intelligently based on active viewport selection
         if context.selected_objects:
@@ -187,6 +215,13 @@ class MCP_OT_regen_names(bpy.types.Operator):
             box_opt.prop(self, "reorg_level")
             box_opt.prop(self, "custom_prompt", icon="TEXT")
 
+        layout.separator()
+        box_vision = layout.box()
+        box_vision.prop(self, "use_vision")
+        if self.use_vision:
+            box_vision.prop(self, "vision_only_generic")
+            box_vision.prop(self, "max_vision_renames")
+
     def execute(self, context):
         params = {
             "lang": self.lang,
@@ -194,6 +229,9 @@ class MCP_OT_regen_names(bpy.types.Operator):
             "use_llm": self.use_llm,
             "reorg_level": self.reorg_level,
             "custom_prompt": self.custom_prompt,
+            "use_vision": self.use_vision,
+            "max_vision_renames": self.max_vision_renames,
+            "vision_only_generic": self.vision_only_generic,
         }
 
         if self.scope == "SELECTED":
@@ -222,7 +260,12 @@ class MCP_OT_regen_names(bpy.types.Operator):
                 self.report({"ERROR"}, result.get("message", "Regen failed"))
                 return {"CANCELLED"}
 
-            self.report({"INFO"}, result["message"])
+            report_msg = result["message"]
+            if result.get("vision_note"):
+                report_msg += f" ({result['vision_note']})"
+            elif result.get("vision_used"):
+                report_msg += f" + {len(result.get('vision_renames', []))} vision-assisted rename(s)"
+            self.report({"INFO"}, report_msg)
             MCP_OT_show_rename_result._pairs = result.get("renamed_pairs", [])
             MCP_OT_show_rename_result._message = result["message"]
             try:
@@ -288,7 +331,9 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
     bl_description = (
         "Analyze the selected mesh(es) -- combining multiple selected objects into one working mesh first -- "
         "separate into logical parts (loose parts or materials), and organize them under parent Empties as "
-        "macro/medium/micro areas using semantic classification (LLM via OPENROUTER_API_KEY in .env)"
+        "macro/medium/micro areas using semantic classification (LLM via OPENROUTER_API_KEY in .env). Every "
+        "separated part stays visible; the original source is renamed with a '.bak' suffix and hidden instead "
+        "of deleted."
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -316,6 +361,33 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
             "their own group', 'ignore screws') -- only applies when OPENROUTER_API_KEY is configured"
         ),
         default="",
+    )
+
+    use_vision: bpy.props.BoolProperty(
+        name="Vision-Assisted Part Naming",
+        description=(
+            "After classification, capture a close-up render of each part and ask a vision model (via "
+            "OPENROUTER_API_KEY in .env) to name it by semantic role within its sub-assembly -- slower "
+            "and one extra API call per part"
+        ),
+        default=False,
+    )
+
+    max_vision_renames: bpy.props.IntProperty(
+        name="Max Vision Renames",
+        description="Cap on how many parts get a vision-assisted rename per run, to bound cost/time",
+        default=9999,
+        min=0,
+        max=9999,
+    )
+
+    vision_only_generic: bpy.props.BoolProperty(
+        name="Only Generic Part Names",
+        description=(
+            "Only run the vision pass on parts that fell back to a generic 'Part_N' name (the LLM/heuristic "
+            "classifier didn't give them a specific one) instead of re-naming every part -- fewer renders/API calls"
+        ),
+        default=True,
     )
 
     def invoke(self, context, event):
@@ -352,11 +424,21 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
         box_opt.prop(self, "reorg_level")
         box_opt.prop(self, "custom_prompt", icon="TEXT")
 
+        layout.separator()
+        box_vision = layout.box()
+        box_vision.prop(self, "use_vision")
+        if self.use_vision:
+            box_vision.prop(self, "vision_only_generic")
+            box_vision.prop(self, "max_vision_renames")
+
     def execute(self, context):
         params = {
             "lang": self.lang,
             "reorg_level": self.reorg_level,
             "custom_prompt": self.custom_prompt,
+            "use_vision": self.use_vision,
+            "max_vision_renames": self.max_vision_renames,
+            "vision_only_generic": self.vision_only_generic,
         }
 
         if context.window:

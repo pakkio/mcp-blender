@@ -232,6 +232,9 @@ GENERIC_NAMES = {
 }
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_DEFAULT_MODEL = "google/gemini-2.5-flash"
+# Mirrors mcp_server's localization_ops.LANG_DISPLAY_NAMES -- only used to
+# turn a lang code into a display name for the vision prompt.
+LANG_DISPLAY_NAMES = {"it": "Italian", "en": "English"}
 
 
 def _call_openrouter_json(system_prompt: str, user_content: str) -> dict:
@@ -287,6 +290,251 @@ def _call_openrouter_json(system_prompt: str, user_content: str) -> dict:
     except Exception as e:
         print(f"[MCP Bridge] OpenRouter LLM request failed: {e}")
         return {}
+
+
+def _call_openrouter_vision(question: str, png_bytes: bytes, model: str = None) -> str:
+    """POST an image + question to OpenRouter's vision endpoint and return the
+    raw text reply, or None on any failure.
+
+    Reimplements mcp_server's vlm.critique_image with urllib so the "Regenerate
+    Names" button can run the vision-assisted mesh-naming pass entirely
+    in-process, without round-tripping through the separate mcp_server process
+    (which the panel button never talks to -- it calls TOOL_REGISTRY directly).
+    """
+    import os
+    import json
+    import base64
+    import urllib.request
+    from ..config import load_env_vars
+
+    load_env_vars()
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        return None
+
+    resolved_model = model or os.environ.get("OPENROUTER_VISION_MODEL") or OPENROUTER_DEFAULT_MODEL
+    data_uri = "data:image/png;base64," + base64.b64encode(png_bytes).decode("utf-8")
+    payload = {
+        "model": resolved_model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": question},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                ],
+            }
+        ],
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    try:
+        req = urllib.request.Request(
+            OPENROUTER_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            response_data = json.loads(resp.read().decode("utf-8"))
+        return response_data["choices"][0]["message"]["content"]
+    except Exception as e:
+        print(f"[MCP Bridge] OpenRouter vision request failed: {e}")
+        return None
+
+
+def _sanitize_vision_name(text: str) -> str:
+    # Vision models sometimes wrap the answer in a sentence or quotes despite
+    # instructions -- take the first line, strip quoting/trailing punctuation,
+    # and cap length so a rambling answer can't produce an unusable name.
+    if not text:
+        return ""
+    first_line = text.strip().splitlines()[0] if text.strip() else ""
+    return first_line.strip(" .\"'“”").strip()[:40]
+
+
+def _collect_mesh_leaves(node: dict) -> list:
+    """Flatten a _regen_collection report tree into every MESH leaf, each
+    carrying its category (immediate parent collection's new_name) for
+    vision-prompt context, and whether the structural/LLM pass already
+    renamed it (used to filter down to still-generic leaves)."""
+    found = []
+    for obj in node.get("objects", []):
+        if obj.get("type") == "MESH":
+            found.append({
+                "name": obj["new_name"],
+                "category": node.get("new_name"),
+                "renamed": bool(obj.get("renamed", False)),
+            })
+    for child in node.get("children", []):
+        found.extend(_collect_mesh_leaves(child))
+    return found
+
+
+def _mesh_candidates_from_result(result: dict) -> list:
+    """MESH leaves to offer the vision pass, from either result shape
+    RegenElementNamesTool.execute() can return: a "root" collection tree, or
+    a flat "objects" list (selection/single-object scope)."""
+    root = result.get("root")
+    if root:
+        return _collect_mesh_leaves(root)
+    return [
+        {"name": o["new_name"], "category": None, "renamed": bool(o.get("renamed", False))}
+        for o in result.get("objects", [])
+        if o.get("type") == "MESH"
+    ]
+
+
+def _apply_vision_pass(
+    result: dict,
+    use_vision: bool,
+    max_vision_renames: int,
+    vision_model: str,
+    lang: str,
+    rename_meshes: bool,
+    vision_only_generic: bool = False,
+) -> dict:
+    """Second pass after the structural/LLM rename: name mesh leaves the
+    keyword vocabulary can't cover (e.g. 'Chair_Mesh') by capturing a close-up
+    render of each and asking a vision model for its semantic role. Mutates
+    and returns `result` so the panel's rename-result dialog picks up the
+    extra pairs for free via the shared "renamed_pairs" list.
+
+    vision_only_generic restricts the vision pass to leaves the structural/LLM
+    pass left untouched ("renamed": False) -- both truly generic exporter
+    names (Cube.003) and vocabulary gaps (Chair_Mesh) -- instead of spending a
+    render+API call re-naming parts that already got a decent name."""
+    result["vision_used"] = False
+    result["vision_renames"] = []
+    result["vision_note"] = None
+
+    if not use_vision:
+        return result
+
+    import os
+    import base64
+    from ..config import load_env_vars
+
+    load_env_vars()
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        result["vision_note"] = "Use Vision was requested but OPENROUTER_API_KEY is not set -- structural pass only."
+        return result
+
+    candidates = _mesh_candidates_from_result(result)
+    if vision_only_generic:
+        candidates = [c for c in candidates if not c.get("renamed")]
+    candidates = candidates[: max(0, int(max_vision_renames))]
+    if not candidates:
+        return result
+
+    from .vision_feedback_ops import InspectFocusShotTool
+    from .progress_hud_ops import push_hud_update
+
+    focus_tool = InspectFocusShotTool()
+    lang_name = LANG_DISPLAY_NAMES.get(lang, lang)
+    vision_renames = []
+    renamed_pairs = result.setdefault("renamed_pairs", [])
+    total = len(candidates)
+
+    for i, candidate in enumerate(candidates, 1):
+        obj_name = candidate["name"]
+        obj = bpy.data.objects.get(obj_name)
+        if obj is None:
+            continue
+        # force_redraw=True: this loop runs entirely inside one Operator.execute()
+        # call (the "Regenerate Names" button), so a plain tag_redraw() would
+        # never actually paint until the whole pass is done -- see
+        # push_hud_update's docstring. Without this the UI just looks frozen
+        # for the whole vision pass (one render + one API round-trip per part).
+        push_hud_update(
+            title="Regenerate Names: Vision Pass",
+            status=f"Naming '{obj_name}' via vision ({lang_name})...",
+            progress_percent=(i - 1) / total * 100.0,
+            step_current=i,
+            step_total=total,
+            force_redraw=True,
+        )
+        try:
+            capture = focus_tool.execute({"target_object": obj_name, "include_base64": True})
+            if not capture.get("success"):
+                continue
+            b64 = capture.get("image_base64")
+            if not b64:
+                continue
+            png_bytes = base64.b64decode(b64)
+
+            category = candidate.get("category")
+            context = f" It belongs to the '{category}' group." if category else ""
+            question = (
+                f"This 3D model part is currently named '{obj_name}'.{context} In one or two "
+                f"words, name it by its SEMANTIC ROLE or FUNCTION within the whole object "
+                f"(e.g. 'leg', 'seat', 'wheel', 'handle', 'blade') -- NOT its geometric shape "
+                f"(never answer 'cube', 'cylinder', 'sphere', 'cone', or similar). Reply in "
+                f"{lang_name} with ONLY that name, capitalized, no punctuation."
+            )
+            answer = _call_openrouter_vision(question, png_bytes, vision_model)
+            new_name = _sanitize_vision_name(answer)
+            if not new_name:
+                continue
+
+            old_name = obj.name
+            obj.name = new_name
+            if rename_meshes and obj.data and hasattr(obj.data, "name") and obj.data.name == old_name:
+                try:
+                    obj.data.name = obj.name
+                except Exception:
+                    pass
+
+            vision_renames.append({"old_name": old_name, "new_name": obj.name})
+            renamed_pairs.append({"old": old_name, "new": obj.name})
+        except Exception as e:
+            print(f"[MCP Bridge] Vision rename failed for '{obj_name}': {e}")
+            continue
+
+    push_hud_update(
+        title="Regenerate Names: Vision Pass",
+        status=f"Done: {len(vision_renames)}/{total} part(s) renamed via vision",
+        progress_percent=100.0,
+        step_current=total,
+        step_total=total,
+        auto_hide_seconds=6.0,
+        force_redraw=True,
+    )
+
+    result["vision_used"] = True
+    result["vision_renames"] = vision_renames
+    return result
+
+
+def _vision_rename_piece(obj: bpy.types.Object, category: str, lang: str, vision_model: str = None) -> str:
+    """Capture a close-up render of a separated part and ask a vision model to
+    name it by semantic role within its sub-assembly. Returns the sanitized
+    new name, or None if the capture or the model call failed. Shared by
+    SeparateLogicalAreasTool's group and leftover/misc assignment loops."""
+    import base64
+    from .vision_feedback_ops import InspectFocusShotTool
+
+    capture = InspectFocusShotTool().execute({"target_object": obj.name, "include_base64": True})
+    if not capture.get("success"):
+        return None
+    b64 = capture.get("image_base64")
+    if not b64:
+        return None
+    png_bytes = base64.b64decode(b64)
+
+    lang_name = LANG_DISPLAY_NAMES.get(lang, lang)
+    context = f" It belongs to the '{category}' sub-assembly." if category else ""
+    question = (
+        f"This 3D model part is currently named '{obj.name}'.{context} In one or two words, name it by "
+        f"its SEMANTIC ROLE or FUNCTION within the whole object (e.g. 'hinge', 'panel', 'handle', "
+        f"'bracket', 'frame') -- NOT its geometric shape (never answer 'cube', 'cylinder', 'sphere', "
+        f"'cone', or similar). Reply in {lang_name} with ONLY that name, capitalized, no punctuation."
+    )
+    answer = _call_openrouter_vision(question, png_bytes, vision_model)
+    return _sanitize_vision_name(answer)
 
 
 _REORG_LEVEL_RENAME_NOTE = {
@@ -491,12 +739,20 @@ class RegenElementNamesTool(ToolBase):
     name = "regen_element_names"
     description = (
         "Rename scene elements (collections, Empties, selected objects, meshes, parts) into "
-        "the target language's vocabulary (default Italian 'it', or 'en'), and re-link "
-        "collection children and objects in alphabetical order."
+        "the target language's vocabulary (default Italian 'it', or 'en'), re-link collection "
+        "children and objects in alphabetical order, and optionally (use_vision=true) run a "
+        "vision-assisted pass afterward to name mesh leaves the vocabulary can't cover, capped "
+        "at max_vision_renames (default 9999) objects to bound cost/time. Pass "
+        "vision_only_generic=true to restrict that pass to leaves the structural/LLM pass left "
+        "untouched instead of re-naming every mesh."
     )
 
     def execute(self, params: dict) -> dict:
         lang = (params.get("lang") or "it").strip().lower()
+        use_vision = bool(params.get("use_vision", False))
+        max_vision_renames = int(params.get("max_vision_renames", 9999))
+        vision_model = params.get("vision_model")
+        vision_only_generic = bool(params.get("vision_only_generic", False))
         vocab = CATEGORY_TRANSLATIONS.get(lang)
         if vocab is None:
             return {
@@ -599,7 +855,7 @@ class RegenElementNamesTool(ToolBase):
 
                     if not is_selection and not is_single_obj and root_col:
                         report = _regen_collection(root_col, vocab, rename_objects=False)
-                        return {
+                        result = {
                             "success": True,
                             "message": f"Regenerated names using LLM for '{report['new_name']}' hierarchy (lang={lang})",
                             "lang": lang,
@@ -607,16 +863,18 @@ class RegenElementNamesTool(ToolBase):
                             "root": report,
                             "renamed_pairs": obj_pairs + _collect_renamed_pairs(report),
                         }
+                        return _apply_vision_pass(result, use_vision, max_vision_renames, vision_model, lang, rename_meshes, vision_only_generic)
                     else:
                         msg = "selected object(s)" if is_selection else f"object hierarchy '{objects_to_rename[0].name}'"
                         total_renamed = sum(1 for r in renamed_objs if r["renamed"])
-                        return {
+                        result = {
                             "success": True,
                             "message": f"Regenerated names using LLM for {msg} ({total_renamed} changed, lang={lang})",
                             "lang": lang,
                             "objects": renamed_objs,
                             "renamed_pairs": obj_pairs,
                         }
+                        return _apply_vision_pass(result, use_vision, max_vision_renames, vision_model, lang, rename_meshes, vision_only_generic)
 
         # Fallback to local dictionary translation
         prompt_note = ""
@@ -633,7 +891,7 @@ class RegenElementNamesTool(ToolBase):
                 renamed_objs.append(rep)
             total_renamed = sum(1 for r in renamed_objs if r["renamed"])
             msg = "selected object(s)" if is_selection else f"object hierarchy '{objects_to_rename[0].name}'"
-            return {
+            result = {
                 "success": True,
                 "message": f"Regenerated names for {msg} ({total_renamed} changed, lang={lang}){prompt_note}",
                 "lang": lang,
@@ -642,15 +900,17 @@ class RegenElementNamesTool(ToolBase):
                     {"old": r["old_name"], "new": r["new_name"]} for r in renamed_objs if r["renamed"]
                 ],
             }
+            return _apply_vision_pass(result, use_vision, max_vision_renames, vision_model, lang, rename_meshes, vision_only_generic)
 
         report = _regen_collection(root_col, vocab, rename_objects=True)
-        return {
+        result = {
             "success": True,
             "message": f"Regenerated names for '{report['new_name']}' hierarchy (lang={lang}){prompt_note}",
             "lang": lang,
             "root": report,
             "renamed_pairs": _collect_renamed_pairs(report),
         }
+        return _apply_vision_pass(result, use_vision, max_vision_renames, vision_model, lang, rename_meshes, vision_only_generic)
 
 
 _REORG_LEVEL_CLASSIFY_NOTE = {
@@ -923,7 +1183,11 @@ class SeparateLogicalAreasTool(ToolBase):
         "first -- separate it into logical parts (by connectivity or materials), use an LLM to classify "
         "and rename them into medium-level sub-assemblies and micro-level parts (e.g. Frame/Panel/Hardware "
         "for a door, not one giant per-material blob), and organize them under parent Empties in a clean "
-        "macro (whole assembly) / medium (sub-assembly) / micro (part) hierarchy."
+        "macro (whole assembly) / medium (sub-assembly) / micro (part) hierarchy. Every separated part is "
+        "left visible; the original source object(s) are renamed with a '.bak' suffix and hidden instead "
+        "of deleted. Pass use_vision=true to also run a vision-assisted pass afterward, capping at "
+        "max_vision_renames (default 9999) objects to bound cost/time; vision_only_generic=true restricts "
+        "it to parts that fell back to a generic 'Part_N' name instead of re-naming every part."
     )
 
     def execute(self, params: dict) -> dict:
@@ -934,6 +1198,33 @@ class SeparateLogicalAreasTool(ToolBase):
 
         custom_prompt = str(params.get("custom_prompt") or "")
         reorg_level = str(params.get("reorg_level") or "STANDARD").strip().upper()
+        use_vision = bool(params.get("use_vision", False))
+        max_vision_renames = int(params.get("max_vision_renames", 9999))
+        vision_model = params.get("vision_model")
+        vision_only_generic = bool(params.get("vision_only_generic", False))
+
+        vision_note = None
+        vision_renames: list[dict] = []
+        vision_budget = max(0, max_vision_renames)
+        if use_vision:
+            import os
+            from ..config import load_env_vars
+            from .progress_hud_ops import push_hud_update
+
+            load_env_vars()
+            if not os.environ.get("OPENROUTER_API_KEY"):
+                vision_note = "Use Vision was requested but OPENROUTER_API_KEY is not set -- classification pass only."
+                use_vision = False
+            else:
+                # Separation + LLM classification below can itself take a few
+                # seconds before the vision loop's own per-part updates start --
+                # this keeps the HUD from sitting blank/stale the whole time.
+                push_hud_update(
+                    title="Separate in Logical Areas",
+                    status="Separating mesh into parts...",
+                    progress_percent=0.0,
+                    force_redraw=True,
+                )
 
         target_objs = [o for o in bpy.context.selected_objects if o.type == "MESH"]
         active_obj = bpy.context.active_object
@@ -1000,6 +1291,13 @@ class SeparateLogicalAreasTool(ToolBase):
             })
 
         # Step 4: Call LLM to classify into medium groups + micro names
+        if use_vision:
+            push_hud_update(
+                title="Separate in Logical Areas",
+                status=f"Classifying {len(parts_info)} part(s) via LLM...",
+                progress_percent=0.0,
+                force_redraw=True,
+            )
         classification = _call_llm_classify(
             parts_info, lang, original_name, custom_prompt=custom_prompt, reorg_level=reorg_level
         )
@@ -1063,6 +1361,48 @@ class SeparateLogicalAreasTool(ToolBase):
             # Same world-space-stability reasoning as the group empty above.
             piece_obj.matrix_parent_inverse = group_empty.matrix_world.inverted()
 
+        # Precompute how many parts the vision pass will actually attempt, so
+        # the HUD can show real "i/total" progress instead of an unbounded
+        # counter -- both `names` and `separated_pieces` are already final by
+        # this point.
+        vision_total = 0
+        if use_vision:
+            eligible = range(len(separated_pieces))
+            if vision_only_generic:
+                eligible = [i for i in eligible if not names.get(str(i))]
+            vision_total = min(len(list(eligible)), vision_budget)
+        vision_done = 0
+
+        def _maybe_vision_rename(piece_obj, category_name: str, was_generic: bool):
+            nonlocal vision_budget, vision_done
+            if not use_vision or vision_budget <= 0 or (vision_only_generic and not was_generic):
+                return
+            vision_done += 1
+            # force_redraw=True: same reasoning as RegenElementNamesTool's
+            # vision pass -- this whole loop runs inside one blocking
+            # Operator.execute() call (the "Separate in Logical Areas"
+            # button), so without it the UI just looks frozen for the
+            # entire pass instead of showing per-part progress.
+            push_hud_update(
+                title="Separate in Logical Areas: Vision Pass",
+                status=f"Naming '{piece_obj.name}' via vision...",
+                progress_percent=(vision_done - 1) / max(1, vision_total) * 100.0,
+                step_current=vision_done,
+                step_total=vision_total,
+                force_redraw=True,
+            )
+            try:
+                vname = _vision_rename_piece(piece_obj, category_name, lang, vision_model)
+                if vname:
+                    old_vname = piece_obj.name
+                    piece_obj.name = vname
+                    if piece_obj.data:
+                        piece_obj.data.name = piece_obj.name
+                    vision_renames.append({"old_name": old_vname, "new_name": piece_obj.name})
+                    vision_budget -= 1
+            except Exception as e:
+                print(f"[MCP Bridge] Vision rename failed for '{piece_obj.name}': {e}")
+
         report_groups = []
         for group_name, indices in groups.items():
             # Medium tier: one Empty per logical sub-assembly
@@ -1079,12 +1419,14 @@ class SeparateLogicalAreasTool(ToolBase):
                         continue
                     # Micro tier: the individual named part
                     piece_obj = separated_pieces[obj_idx]
+                    was_generic = not names.get(str(obj_idx))
                     new_name = names.get(str(obj_idx)) or f"Part_{obj_idx}"
                     piece_obj.name = new_name
                     if piece_obj.data:
                         piece_obj.data.name = new_name
                     _attach_piece(piece_obj, group_empty)
                     assigned.add(obj_idx)
+                    _maybe_vision_rename(piece_obj, group_empty.name, was_generic)
                     group_pieces.append(piece_obj.name)
             # Read the name back from the object rather than echoing group_name:
             # Blender auto-suffixes (".001") on a collision with an existing
@@ -1102,31 +1444,65 @@ class SeparateLogicalAreasTool(ToolBase):
             misc_pieces = []
             for obj_idx in leftovers:
                 piece_obj = separated_pieces[obj_idx]
+                was_generic = not names.get(str(obj_idx))
                 new_name = names.get(str(obj_idx)) or f"Part_{obj_idx}"
                 piece_obj.name = new_name
                 if piece_obj.data:
                     piece_obj.data.name = new_name
                 _attach_piece(piece_obj, misc_empty)
+                _maybe_vision_rename(piece_obj, misc_empty.name, was_generic)
                 misc_pieces.append(piece_obj.name)
             report_groups.append({"group": misc_empty.name, "parts": misc_pieces})
 
+        if use_vision and vision_total > 0:
+            push_hud_update(
+                title="Separate in Logical Areas: Vision Pass",
+                status=f"Done: {len(vision_renames)}/{vision_total} part(s) renamed via vision",
+                progress_percent=100.0,
+                step_current=vision_total,
+                step_total=vision_total,
+                auto_hide_seconds=6.0,
+                force_redraw=True,
+            )
+
+        # Every separated piece must land visible -- separate()/duplicate()
+        # can otherwise inherit a hidden state from the source object (e.g.
+        # re-running on a previously-processed ".bak" source), which would
+        # silently bury working parts instead of surfacing them.
+        for piece_obj in separated_pieces:
+            piece_obj.hide_viewport = False
+            piece_obj.hide_render = False
+
+        # Keep the original(s) as a hidden backup rather than deleting them --
+        # renamed with a ".bak" suffix so they read unambiguously as inert
+        # source geometry rather than a live duplicate part in the outliner.
         for obj in target_objs:
             obj.hide_viewport = True
             obj.hide_render = True
+            if not obj.name.endswith(".bak"):
+                obj.name = f"{obj.name}.bak"
 
         combined_note = f" (combined from {combined_count} selected objects)" if combined_count > 1 else ""
         classifier_note = "LLM" if used_llm else "heuristic spatial clustering (set OPENROUTER_API_KEY for smarter classification)"
         prompt_note = ""
         if custom_prompt.strip() and not used_llm:
             prompt_note = " Custom instructions were ignored -- they only apply when OPENROUTER_API_KEY is configured."
+        vision_note_suffix = ""
+        if vision_note:
+            vision_note_suffix = f" {vision_note}"
+        elif vision_renames:
+            vision_note_suffix = f" +{len(vision_renames)} vision-assisted part rename(s)."
         return {
             "success": True,
             "message": (
                 f"Successfully separated '{original_name}'{combined_note} into {len(separated_pieces)} parts "
                 f"across {len(report_groups)} logical groups (classified via {classifier_note})."
-                f"{prompt_note}"
+                f"{prompt_note}{vision_note_suffix}"
             ),
             "root_object": root_empty.name,
             "used_llm": used_llm,
-            "groups": report_groups
+            "groups": report_groups,
+            "vision_used": use_vision,
+            "vision_renames": vision_renames,
+            "vision_note": vision_note,
         }

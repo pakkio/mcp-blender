@@ -60,6 +60,8 @@ async def test_progress_hud_tools(mock_bridge, mcp_server):
         "step_current": 3,
         "step_total": 4,
         "details": ["Setup nodes", "Render bake", "Denoise"],
+        "completed_summary": "Baked albedo and normal maps",
+        "next_steps": ["Export textures", "Assign to material"],
     })
     assert res["success"] is True
 
