@@ -31,7 +31,11 @@ preferences panel):
 a stale "reachable" verdict for up to 5 minutes after the bridge actually
 disconnects. See `.printing-press-patches/0001-websocket-transport.md` for why
 this CLI needed a custom WebSocket transport and what it does and doesn't
-cover.
+cover, and `.printing-press-patches/0002-vlm-and-asset-pipeline.md` for the
+native Go implementation of asset search/import, VLM scene evaluation, and
+LLM/dictionary-assisted renaming (env vars: `OPENROUTER_API_KEY` +
+`OPENROUTER_VISION_MODEL` for vision commands, `SKETCHFAB_API_TOKEN` for
+Sketchfab downloads).
 
 ---
 

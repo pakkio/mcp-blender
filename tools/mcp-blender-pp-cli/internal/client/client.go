@@ -1198,6 +1198,18 @@ func renameBridgeKeys(path string, params any) any {
 	return out
 }
 
+// CallBridge issues a raw Blender-bridge JSON-RPC call by method name,
+// bypassing the path->method translation used by generated commands. Hand-
+// written commands that need multi-step orchestration against the bridge
+// (asset import, vision evaluation, localization) call this directly instead
+// of going through doWebSocketBridge's single path-mapped passthrough.
+func (c *Client) CallBridge(ctx context.Context, method string, params any, timeout time.Duration) (json.RawMessage, error) {
+	if timeout <= 0 {
+		timeout = c.ConfiguredTimeout()
+	}
+	return wsbridge.Call(ctx, c.BaseURL, method, params, timeout)
+}
+
 func safeEndpointClass(method, path string) string {
 	path = strings.TrimSpace(path)
 	if parsed, err := url.Parse(path); err == nil && parsed.IsAbs() {

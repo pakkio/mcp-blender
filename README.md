@@ -340,7 +340,7 @@ cd tools/mcp-blender-pp-cli
 echo '{"object_type":"CONE","name":"MyCone"}' | ./mcp-blender-pp-cli mesh create --stdin
 ```
 
-The generator's default HTTP client was replaced with a real WebSocket transport (`internal/wsbridge/`, `internal/client/wsbridge_map.go`) since this project has no REST API. See `.printing-press-patches/0001-websocket-transport.md` in that directory for what was hand-patched, why, and its known limitations (`search-online-assets` / `import-online-asset` / `ai_generate` / `evaluate-scene-visually` / `scene regen` are not wired -- their logic lives in the Python `mcp_server` process, not the Blender bridge).
+The generator's default HTTP client was replaced with a real WebSocket transport (`internal/wsbridge/`, `internal/client/wsbridge_map.go`) since this project has no REST API. `search-online-assets` / `import-online-asset` / `evaluate-scene-visually` / `scene regen` are natively reimplemented in Go too (`internal/blenderassets/`, `internal/vlm/`) rather than left as bridge-only passthroughs, since their real logic (HTTP asset fetching, OpenRouter vision calls) runs outside the Blender bridge. `ai_generate` (Meshy/Tripo/Trellis text-to-3D) is not wired. See `.printing-press-patches/0001-websocket-transport.md` and `0002-vlm-and-asset-pipeline.md` in that directory for what was hand-patched, why, and remaining narrower-than-Python scope.
 
 ---
 
