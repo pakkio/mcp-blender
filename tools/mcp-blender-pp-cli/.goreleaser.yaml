@@ -1,0 +1,51 @@
+version: 2
+project_name: mcp-blender-pp-cli
+changelog:
+  disable: true
+builds:
+  - id: mcp-blender-pp-cli
+    main: ./cmd/mcp-blender-pp-cli
+    binary: mcp-blender-pp-cli
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X mcp-blender-pp-cli/internal/cli.version={{ .Version }}
+    targets:
+      - darwin_amd64
+      - darwin_arm64
+      - linux_amd64
+      - linux_arm64
+      - windows_amd64
+      - windows_arm64
+  - id: mcp-blender-pp-mcp
+    main: ./cmd/mcp-blender-pp-mcp
+    binary: mcp-blender-pp-mcp
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    targets:
+      - darwin_amd64
+      - darwin_arm64
+      - linux_amd64
+      - linux_arm64
+      - windows_amd64
+      - windows_arm64
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+checksum:
+  name_template: checksums.txt
+brews:
+  - name: mcp-blender-pp-cli
+    repository:
+      owner: 
+      name: homebrew-tap
+    homepage: "https://github.com//mcp-blender-pp-cli"
+    description: "Printing Press CLI for Mcp Blender."
+    install: |
+      bin.install "mcp-blender-pp-cli"
+      bin.install "mcp-blender-pp-mcp"

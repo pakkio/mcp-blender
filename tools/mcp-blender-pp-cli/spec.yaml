@@ -1,0 +1,388 @@
+name: mcp-blender
+info:
+  title: mcp-blender Local Bridge
+  description: >
+    Local WebSocket bridge (127.0.0.1:9876) between the mcp-blender MCP server
+    and the Blender addon. Not a public HTTP API -- endpoints below are a
+    logical mapping of the 14 aggregated-mode MCP tools (10 domain facades +
+    4 standalone high-stakes tools) exposed by mcp_server/src/mcp_blender.
+    Real transport is WebSocket JSON envelopes, not HTTP; the generated HTTP
+    client is a placeholder to be replaced with a WebSocket client after
+    generation.
+  version: "2.0.26"
+
+auth:
+  type: none
+
+base_url: "ws://127.0.0.1:9876"
+
+resources:
+  docs:
+    description: Query multi-step 3D workflow recipes, parameters, and best practices on demand.
+    endpoints:
+      search:
+        method: POST
+        path: /blender_docs
+        no_auth: true
+        params:
+          - name: query
+            required: true
+            description: Search term (e.g. 'cloth simulation', 'pbr materials', 'decimate', 'rigging')
+          - name: category
+            required: false
+            description: Optional filter category (RECIPE, MESH, MATERIAL, ASSETS, SCENE, RIGGING, LIGHTING, PHYSICS, RENDER, ALL)
+
+  mesh:
+    description: 3D modeling, transforms, boolean CSG, decimation, voxel remesh, UV unwrap, and modifiers.
+    endpoints:
+      create:
+        method: POST
+        path: /blender_mesh/create
+        no_auth: true
+        params: [{name: params, description: "Object creation args (type, name, location, size)"}]
+      delete:
+        method: POST
+        path: /blender_mesh/delete
+        no_auth: true
+        params: [{name: params, description: "Object name to delete"}]
+      duplicate:
+        method: POST
+        path: /blender_mesh/duplicate
+        no_auth: true
+        params: [{name: params, description: "Object to duplicate, offset"}]
+      transform:
+        method: POST
+        path: /blender_mesh/transform
+        no_auth: true
+        params: [{name: params, description: "location, rotation, scale"}]
+      apply_transform:
+        method: POST
+        path: /blender_mesh/apply_transform
+        no_auth: true
+        params: [{name: params, description: "object_name, location/rotation/scale flags"}]
+      boolean:
+        method: POST
+        path: /blender_mesh/boolean
+        no_auth: true
+        params: [{name: params, description: "operation type, target/cutter objects"}]
+      decimate:
+        method: POST
+        path: /blender_mesh/decimate
+        no_auth: true
+        params: [{name: params, description: "object_name, ratio"}]
+      remesh:
+        method: POST
+        path: /blender_mesh/remesh
+        no_auth: true
+        params: [{name: params, description: "object_name, voxel_size"}]
+      simplify_geometry:
+        method: POST
+        path: /blender_mesh/simplify_geometry
+        no_auth: true
+        params: [{name: params, description: "object_name, target_verts, max_deviation_pct, allow_new_holes, rollback_on_failure"}]
+      uv_unwrap:
+        method: POST
+        path: /blender_mesh/uv_unwrap
+        no_auth: true
+        params: [{name: params, description: "object_name, method"}]
+      mesh_op:
+        method: POST
+        path: /blender_mesh/mesh_op
+        no_auth: true
+        params: [{name: params, description: "generic mesh-edit operation args"}]
+      modifier:
+        method: POST
+        path: /blender_mesh/modifier
+        no_auth: true
+        params: [{name: params, description: "object_name, modifier_type, settings"}]
+      origin_cursor:
+        method: POST
+        path: /blender_mesh/origin_cursor
+        no_auth: true
+        params: [{name: params, description: "object_name, origin mode, cursor location"}]
+
+  material:
+    description: PBR shading, procedural grunge masks, toon shaders, alpha transparency, triplanar mapping, and material slots.
+    endpoints:
+      create:
+        method: POST
+        path: /blender_material/create
+        no_auth: true
+        params: [{name: params, description: "name, base_color, metallic, roughness, assign_to_object"}]
+      assign:
+        method: POST
+        path: /blender_material/assign
+        no_auth: true
+        params: [{name: params, description: "object_name, material_name, slot_index"}]
+      pbr_setup:
+        method: POST
+        path: /blender_material/pbr_setup
+        no_auth: true
+        params: [{name: params, description: "texture folder auto-loader settings"}]
+      procedural_grunge:
+        method: POST
+        path: /blender_material/procedural_grunge
+        no_auth: true
+        params: [{name: params, description: "edge-wear grunge mask settings"}]
+      toon_shader:
+        method: POST
+        path: /blender_material/toon_shader
+        no_auth: true
+        params: [{name: params, description: "toon/NPR shader settings"}]
+      transparency:
+        method: POST
+        path: /blender_material/transparency
+        no_auth: true
+        params: [{name: params, description: "alpha, blend_mode"}]
+      triplanar:
+        method: POST
+        path: /blender_material/triplanar
+        no_auth: true
+        params: [{name: params, description: "triplanar box mapping settings"}]
+      slots:
+        method: POST
+        path: /blender_material/slots
+        no_auth: true
+        params: [{name: params, description: "material slot management args"}]
+      edit_nodes:
+        method: POST
+        path: /blender_material/edit_nodes
+        no_auth: true
+        params: [{name: params, description: "shader node graph edits"}]
+
+  assets:
+    description: Online asset search (Poly Haven/Sketchfab/ambientCG) and AI text-to-3D generation (Meshy/Tripo/Trellis).
+    endpoints:
+      search_online:
+        method: POST
+        path: /blender_assets/search_online
+        no_auth: true
+        params:
+          - {name: query, required: true, description: "search text"}
+          - {name: asset_type, description: "MODEL, HDRI, TEXTURE"}
+          - {name: providers, description: "provider filter list"}
+          - {name: limit, description: "max results"}
+          - {name: free_only, description: "CC0/free only flag"}
+      import_online:
+        method: POST
+        path: /blender_assets/import_online
+        no_auth: true
+        params:
+          - {name: asset_id, required: true}
+          - {name: provider, description: "polyhaven|sketchfab|ambientcg"}
+          - {name: target_poly_budget}
+          - {name: collection_path}
+          - {name: location}
+          - {name: scale_to_size}
+          - {name: forward_axis, description: "source file forward axis"}
+          - {name: up_axis, description: "source file up axis"}
+          - {name: auto_orient, description: "auto-fix suspect orientation"}
+      ai_generate:
+        method: POST
+        path: /blender_assets/ai_generate
+        no_auth: true
+        params:
+          - {name: prompt, required: true}
+          - {name: provider, description: "meshy|tripo, default meshy"}
+          - {name: target_vertices, description: "post-generation vertex budget"}
+          - {name: reduction_method, description: "simplify|decimate|remesh|none"}
+      asset_browser:
+        method: POST
+        path: /blender_assets/asset_browser
+        no_auth: true
+        params: [{name: params, description: "Blender asset browser management args"}]
+
+  scene:
+    description: Scene inspection, hierarchy organization, checkpoint rollback, orphan purging, and background jobs.
+    endpoints:
+      info:
+        method: POST
+        path: /blender_scene/info
+        no_auth: true
+        params: []
+      hierarchy:
+        method: POST
+        path: /blender_scene/hierarchy
+        no_auth: true
+        params: [{name: params, description: "collection_path, empty-parent hierarchy over object set"}]
+      collection:
+        method: POST
+        path: /blender_scene/collection
+        no_auth: true
+        params: [{name: params, description: "collection management args"}]
+      checkpoint_create:
+        method: POST
+        path: /blender_scene/checkpoint_create
+        no_auth: true
+        params: [{name: params, description: "checkpoint label"}]
+      checkpoint_restore:
+        method: POST
+        path: /blender_scene/checkpoint_restore
+        no_auth: true
+        params: [{name: params, description: "checkpoint id to restore"}]
+      checkpoint_list:
+        method: POST
+        path: /blender_scene/checkpoint_list
+        no_auth: true
+        params: []
+      purge_orphans:
+        method: POST
+        path: /blender_scene/purge_orphans
+        no_auth: true
+        params: []
+      job_status:
+        method: POST
+        path: /blender_scene/job_status
+        no_auth: true
+        params: [{name: params, description: "job_id"}]
+      job_list:
+        method: POST
+        path: /blender_scene/job_list
+        no_auth: true
+        params: []
+      job_cancel:
+        method: POST
+        path: /blender_scene/job_cancel
+        no_auth: true
+        params: [{name: params, description: "job_id"}]
+      performance:
+        method: POST
+        path: /blender_scene/performance
+        no_auth: true
+        params: []
+      busy:
+        method: POST
+        path: /blender_scene/busy
+        no_auth: true
+        params: []
+      regen:
+        method: POST
+        path: /blender_scene/regen
+        no_auth: true
+        params:
+          - {name: lang, description: "target language, e.g. it"}
+          - {name: element, description: "optional single element to rename"}
+          - {name: use_vision, description: "use VLM to inspect geometry for naming"}
+          - {name: max_vision_renames}
+          - {name: vision_model}
+
+  rigging_anim:
+    description: Armatures, bone posing, IK rigs, hair curves creation/grooming, animation keyframes, turntable animation.
+    endpoints:
+      create_armature: {method: POST, path: /blender_rigging_anim/create_armature, no_auth: true, params: [{name: params}]}
+      pose_bone: {method: POST, path: /blender_rigging_anim/pose_bone, no_auth: true, params: [{name: params}]}
+      setup_ik: {method: POST, path: /blender_rigging_anim/setup_ik, no_auth: true, params: [{name: params}]}
+      setup_humanoid_rig: {method: POST, path: /blender_rigging_anim/setup_humanoid_rig, no_auth: true, params: [{name: params}]}
+      create_hair_curves: {method: POST, path: /blender_rigging_anim/create_hair_curves, no_auth: true, params: [{name: params}]}
+      apply_hair_groom: {method: POST, path: /blender_rigging_anim/apply_hair_groom, no_auth: true, params: [{name: params}]}
+      set_keyframe: {method: POST, path: /blender_rigging_anim/set_keyframe, no_auth: true, params: [{name: params}]}
+      turntable: {method: POST, path: /blender_rigging_anim/turntable, no_auth: true, params: [{name: params}]}
+      timeline_range: {method: POST, path: /blender_rigging_anim/timeline_range, no_auth: true, params: [{name: params}]}
+
+  camera_lighting:
+    description: Studio/sun-sky lighting rigs, camera tracking/framing, viewport screenshots, AI visual critique.
+    endpoints:
+      camera_setup: {method: POST, path: /blender_camera_lighting/camera_setup, no_auth: true, params: [{name: params}]}
+      look_at: {method: POST, path: /blender_camera_lighting/look_at, no_auth: true, params: [{name: params}]}
+      frame_objects: {method: POST, path: /blender_camera_lighting/frame_objects, no_auth: true, params: [{name: params}]}
+      light_setup: {method: POST, path: /blender_camera_lighting/light_setup, no_auth: true, params: [{name: params}]}
+      studio_lighting: {method: POST, path: /blender_camera_lighting/studio_lighting, no_auth: true, params: [{name: params}]}
+      sun_sky_rig: {method: POST, path: /blender_camera_lighting/sun_sky_rig, no_auth: true, params: [{name: params}]}
+      screenshot: {method: POST, path: /blender_camera_lighting/screenshot, no_auth: true, params: [{name: params}]}
+      evaluate_scene:
+        method: POST
+        path: /blender_camera_lighting/evaluate_scene
+        no_auth: true
+        params: [{name: camera_name}, {name: prompt}, {name: resolution}]
+      compositor_effects: {method: POST, path: /blender_camera_lighting/compositor_effects, no_auth: true, params: [{name: params}]}
+
+  physics_sim:
+    description: Rigid body physics, cloth simulation, wind/vortex forces, fluid domain baking, scene physics settings.
+    endpoints:
+      setup_rigid_body: {method: POST, path: /blender_physics_sim/setup_rigid_body, no_auth: true, params: [{name: params}]}
+      setup_cloth: {method: POST, path: /blender_physics_sim/setup_cloth, no_auth: true, params: [{name: params}]}
+      add_force_field: {method: POST, path: /blender_physics_sim/add_force_field, no_auth: true, params: [{name: params}]}
+      bake_fluid: {method: POST, path: /blender_physics_sim/bake_fluid, no_auth: true, params: [{name: params}]}
+      configure_physics: {method: POST, path: /blender_physics_sim/configure_physics, no_auth: true, params: [{name: params}]}
+
+  render_pipeline:
+    description: Still/animation rendering, PBR texture baking, Unity FBX export, LOD chain generation, VFX tracking.
+    endpoints:
+      render_image: {method: POST, path: /blender_render_pipeline/render_image, no_auth: true, params: [{name: params}]}
+      render_anim: {method: POST, path: /blender_render_pipeline/render_anim, no_auth: true, params: [{name: params}]}
+      bake_textures: {method: POST, path: /blender_render_pipeline/bake_textures, no_auth: true, params: [{name: params}]}
+      export_unity_fbx: {method: POST, path: /blender_render_pipeline/export_unity_fbx, no_auth: true, params: [{name: params}]}
+      generate_lods: {method: POST, path: /blender_render_pipeline/generate_lods, no_auth: true, params: [{name: params}]}
+      vfx_tracking: {method: POST, path: /blender_render_pipeline/vfx_tracking, no_auth: true, params: [{name: params}]}
+      vfx_shadow_catcher: {method: POST, path: /blender_render_pipeline/vfx_shadow_catcher, no_auth: true, params: [{name: params}]}
+
+  python_exec:
+    description: Direct raw Python execution escape hatch inside Blender.
+    endpoints:
+      execute:
+        method: POST
+        path: /execute_blender_python
+        no_auth: true
+        params: [{name: code, required: true, description: "raw Python source to exec inside Blender"}]
+
+  search_online_assets:
+    description: Standalone high-stakes entry point (also reachable via blender_assets(action=search_online)). Poly Haven, Sketchfab, ambientCG search.
+    endpoints:
+      search:
+        method: POST
+        path: /search_online_assets
+        no_auth: true
+        params:
+          - {name: query, required: true}
+          - {name: asset_type}
+          - {name: providers}
+          - {name: limit}
+          - {name: free_only}
+
+  import_online_asset:
+    description: Standalone high-stakes entry point (also reachable via blender_assets(action=import_online)). Import with axis correction and orientation verdicts.
+    endpoints:
+      import:
+        method: POST
+        path: /import_online_asset
+        no_auth: true
+        params:
+          - {name: asset_id, required: true}
+          - {name: provider}
+          - {name: target_poly_budget}
+          - {name: collection_path}
+          - {name: location}
+          - {name: scale_to_size}
+          - {name: forward_axis}
+          - {name: up_axis}
+          - {name: auto_orient}
+
+  evaluate_scene_visually:
+    description: Standalone high-stakes entry point (also reachable via blender_camera_lighting(action=evaluate_scene)). AI visual critique via viewport screenshot + VLM.
+    endpoints:
+      evaluate:
+        method: POST
+        path: /evaluate_scene_visually
+        no_auth: true
+        params:
+          - {name: camera_name}
+          - {name: prompt}
+          - {name: resolution}
+
+  simplify_geometry:
+    description: Standalone high-stakes entry point (also reachable via blender_mesh(action=simplify_geometry)). Repair-then-reduce mesh simplification with quality gate and rollback.
+    endpoints:
+      simplify:
+        method: POST
+        path: /simplify_geometry
+        no_auth: true
+        params:
+          - {name: object_name, required: true}
+          - {name: target_verts}
+          - {name: max_deviation_pct, description: "default 2.0"}
+          - {name: allow_new_holes, description: "default 0"}
+          - {name: rollback_on_failure, description: "default true"}
+
+mcp:
+  transport: [stdio]
+  endpoint_tools: visible

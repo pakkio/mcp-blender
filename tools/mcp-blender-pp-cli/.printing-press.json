@@ -1,0 +1,33 @@
+{
+  "schema_version": 2,
+  "generated_at": "2026-08-21T09:05:45.1287647Z",
+  "printing_press_version": "4.31.1",
+  "api_name": "mcp-blender",
+  "display_name": "Mcp Blender",
+  "cli_name": "mcp-blender-pp-cli",
+  "creator": {
+    "name": "pakkio"
+  },
+  "printer_name": "pakkio",
+  "spec_path": "spec.yaml",
+  "spec_format": "internal",
+  "spec_checksum": "sha256:6a7ca0ac6c72f5b28a2a0da5b4051890018a13eb0fea4eb8f396ced93ec8bbff",
+  "run_id": "20260821-090545",
+  "description": "Printing Press CLI for Mcp Blender.",
+  "mcp_binary": "mcp-blender-pp-mcp",
+  "mcp_tool_count": 75,
+  "mcp_public_tool_count": 75,
+  "mcp_ready": "full",
+  "auth_type": "none",
+  "auth_env_vars": [
+    "PRINTING_PRESS_CLIENT_PROFILE"
+  ],
+  "auth_env_var_specs": [
+    {
+      "name": "PRINTING_PRESS_CLIENT_PROFILE",
+      "kind": "per_call",
+      "required": true,
+      "sensitive": false
+    }
+  ]
+}

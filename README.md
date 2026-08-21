@@ -330,6 +330,20 @@ python scripts/run_live_bpy_tests.py
 
 ---
 
+## 🖥️ Standalone CLI (`tools/mcp-blender-pp-cli/`)
+
+An experimental Go CLI, generated with [CLI Printing Press](https://github.com/mvanhorn/cli-printing-press) from the 14 aggregated-mode MCP tools, that talks directly to the Blender WebSocket bridge (`ws://127.0.0.1:9876`) without going through the MCP server:
+
+```bash
+cd tools/mcp-blender-pp-cli
+./mcp-blender-pp-cli doctor
+echo '{"object_type":"CONE","name":"MyCone"}' | ./mcp-blender-pp-cli mesh create --stdin
+```
+
+The generator's default HTTP client was replaced with a real WebSocket transport (`internal/wsbridge/`, `internal/client/wsbridge_map.go`) since this project has no REST API. See `.printing-press-patches/0001-websocket-transport.md` in that directory for what was hand-patched, why, and its known limitations (`search-online-assets` / `import-online-asset` / `ai_generate` / `evaluate-scene-visually` / `scene regen` are not wired -- their logic lives in the Python `mcp_server` process, not the Blender bridge).
+
+---
+
 ## 📜 License
 
 MIT License -- see `LICENSE`.

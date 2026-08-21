@@ -1,0 +1,1364 @@
+{
+  "api_name": "mcp-blender",
+  "base_url": "ws://127.0.0.1:9876",
+  "description": "Printing Press CLI for Mcp Blender.",
+  "mcp_ready": "full",
+  "http_transport": "standard",
+  "mcp": {
+    "endpoint_tools": "hidden",
+    "orchestration": "code"
+  },
+  "auth": {
+    "type": "none"
+  },
+  "required_headers": [],
+  "tools": [
+    {
+      "name": "assets_ai_generate",
+      "description": "Create a new ai generate. Required: prompt. Optional: provider, target_vertices, reduction_method.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_assets/ai_generate",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "prompt",
+          "type": "string",
+          "location": "body",
+          "required": true
+        },
+        {
+          "name": "provider",
+          "type": "string",
+          "location": "body",
+          "description": "meshy|tripo, default meshy"
+        },
+        {
+          "name": "target_vertices",
+          "type": "string",
+          "location": "body",
+          "description": "post-generation vertex budget"
+        },
+        {
+          "name": "reduction_method",
+          "type": "string",
+          "location": "body",
+          "description": "simplify|decimate|remesh|none"
+        }
+      ]
+    },
+    {
+      "name": "assets_asset_browser",
+      "description": "Create a new asset browser. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_assets/asset_browser",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "Blender asset browser management args"
+        }
+      ]
+    },
+    {
+      "name": "assets_import_online",
+      "description": "Create a new import online. Required: asset_id. Optional: provider, target_poly_budget, collection_path (plus 5 more).",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_assets/import_online",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "asset_id",
+          "type": "string",
+          "location": "body",
+          "required": true
+        },
+        {
+          "name": "provider",
+          "type": "string",
+          "location": "body",
+          "description": "polyhaven|sketchfab|ambientcg"
+        },
+        {
+          "name": "target_poly_budget",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "collection_path",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "location",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "scale_to_size",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "forward_axis",
+          "type": "string",
+          "location": "body",
+          "description": "source file forward axis"
+        },
+        {
+          "name": "up_axis",
+          "type": "string",
+          "location": "body",
+          "description": "source file up axis"
+        },
+        {
+          "name": "auto_orient",
+          "type": "string",
+          "location": "body",
+          "description": "auto-fix suspect orientation"
+        }
+      ]
+    },
+    {
+      "name": "assets_search_online",
+      "description": "Create a new search online. Required: query. Optional: asset_type, providers, limit (plus 1 more).",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_assets/search_online",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "location": "body",
+          "description": "search text",
+          "required": true
+        },
+        {
+          "name": "asset_type",
+          "type": "string",
+          "location": "body",
+          "description": "MODEL, HDRI, TEXTURE"
+        },
+        {
+          "name": "providers",
+          "type": "string",
+          "location": "body",
+          "description": "provider filter list"
+        },
+        {
+          "name": "limit",
+          "type": "string",
+          "location": "body",
+          "description": "max results"
+        },
+        {
+          "name": "free_only",
+          "type": "string",
+          "location": "body",
+          "description": "CC0/free only flag"
+        }
+      ]
+    },
+    {
+      "name": "camera_lighting_camera_setup",
+      "description": "Create a new camera setup. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_camera_lighting/camera_setup",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "camera_lighting_compositor_effects",
+      "description": "Create a new compositor effect. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_camera_lighting/compositor_effects",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "camera_lighting_evaluate_scene",
+      "description": "Create a new evaluate scene. Optional: camera_name, prompt, resolution.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_camera_lighting/evaluate_scene",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "camera_name",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "prompt",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "resolution",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "camera_lighting_frame_objects",
+      "description": "Create a new frame object. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_camera_lighting/frame_objects",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "camera_lighting_light_setup",
+      "description": "Create a new light setup. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_camera_lighting/light_setup",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "camera_lighting_look_at",
+      "description": "Create a new look at. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_camera_lighting/look_at",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "camera_lighting_screenshot",
+      "description": "Create a new screenshot. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_camera_lighting/screenshot",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "camera_lighting_studio_lighting",
+      "description": "Create a new studio lighting. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_camera_lighting/studio_lighting",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "camera_lighting_sun_sky_rig",
+      "description": "Create a new sun sky rig. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_camera_lighting/sun_sky_rig",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "docs_search",
+      "description": "Create a new blender doc. Required: query. Optional: category.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_docs",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "location": "body",
+          "description": "Search term (e.g. 'cloth simulation', 'pbr materials', 'decimate', 'rigging')",
+          "required": true
+        },
+        {
+          "name": "category",
+          "type": "string",
+          "location": "body",
+          "description": "Optional filter category (RECIPE, MESH, MATERIAL, ASSETS, SCENE, RIGGING, LIGHTING, PHYSICS, RENDER, ALL)"
+        }
+      ]
+    },
+    {
+      "name": "evaluate_scene_visually_evaluate",
+      "description": "Create a new evaluate scene visually. Optional: camera_name, prompt, resolution.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/evaluate_scene_visually",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "camera_name",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "prompt",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "resolution",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "import_online_asset_import",
+      "description": "Create a new import online asset. Required: asset_id. Optional: provider, target_poly_budget, collection_path (plus 5 more).",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/import_online_asset",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "asset_id",
+          "type": "string",
+          "location": "body",
+          "required": true
+        },
+        {
+          "name": "provider",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "target_poly_budget",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "collection_path",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "location",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "scale_to_size",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "forward_axis",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "up_axis",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "auto_orient",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "material_assign",
+      "description": "Create a new assign. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_material/assign",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "object_name, material_name, slot_index"
+        }
+      ]
+    },
+    {
+      "name": "material_create",
+      "description": "Create a new create. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_material/create",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "name, base_color, metallic, roughness, assign_to_object"
+        }
+      ]
+    },
+    {
+      "name": "material_edit_nodes",
+      "description": "Create a new edit node. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_material/edit_nodes",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "shader node graph edits"
+        }
+      ]
+    },
+    {
+      "name": "material_pbr_setup",
+      "description": "Create a new pbr setup. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_material/pbr_setup",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "texture folder auto-loader settings"
+        }
+      ]
+    },
+    {
+      "name": "material_procedural_grunge",
+      "description": "Create a new procedural grunge. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_material/procedural_grunge",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "edge-wear grunge mask settings"
+        }
+      ]
+    },
+    {
+      "name": "material_slots",
+      "description": "Create a new slot. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_material/slots",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "material slot management args"
+        }
+      ]
+    },
+    {
+      "name": "material_toon_shader",
+      "description": "Create a new toon shader. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_material/toon_shader",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "toon/NPR shader settings"
+        }
+      ]
+    },
+    {
+      "name": "material_transparency",
+      "description": "Create a new transparency. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_material/transparency",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "alpha, blend_mode"
+        }
+      ]
+    },
+    {
+      "name": "material_triplanar",
+      "description": "Create a new triplanar. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_material/triplanar",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "triplanar box mapping settings"
+        }
+      ]
+    },
+    {
+      "name": "mesh_apply_transform",
+      "description": "Create a new apply transform. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/apply_transform",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "object_name, location/rotation/scale flags"
+        }
+      ]
+    },
+    {
+      "name": "mesh_boolean",
+      "description": "Create a new boolean. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/boolean",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "operation type, target/cutter objects"
+        }
+      ]
+    },
+    {
+      "name": "mesh_create",
+      "description": "Create a new create. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/create",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "Object creation args (type, name, location, size)"
+        }
+      ]
+    },
+    {
+      "name": "mesh_decimate",
+      "description": "Create a new decimate. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/decimate",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "object_name, ratio"
+        }
+      ]
+    },
+    {
+      "name": "mesh_delete",
+      "description": "Create a new delete. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/delete",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "Object name to delete"
+        }
+      ]
+    },
+    {
+      "name": "mesh_duplicate",
+      "description": "Create a new duplicate. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/duplicate",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "Object to duplicate, offset"
+        }
+      ]
+    },
+    {
+      "name": "mesh_mesh_op",
+      "description": "Create a new mesh op. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/mesh_op",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "generic mesh-edit operation args"
+        }
+      ]
+    },
+    {
+      "name": "mesh_modifier",
+      "description": "Create a new modifier. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/modifier",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "object_name, modifier_type, settings"
+        }
+      ]
+    },
+    {
+      "name": "mesh_origin_cursor",
+      "description": "Create a new origin cursor. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/origin_cursor",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "object_name, origin mode, cursor location"
+        }
+      ]
+    },
+    {
+      "name": "mesh_remesh",
+      "description": "Create a new remesh. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/remesh",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "object_name, voxel_size"
+        }
+      ]
+    },
+    {
+      "name": "mesh_simplify_geometry",
+      "description": "Create a new simplify geometry. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/simplify_geometry",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "object_name, target_verts, max_deviation_pct, allow_new_holes, rollback_on_failure"
+        }
+      ]
+    },
+    {
+      "name": "mesh_transform",
+      "description": "Create a new transform. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/transform",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "location, rotation, scale"
+        }
+      ]
+    },
+    {
+      "name": "mesh_uv_unwrap",
+      "description": "Create a new uv unwrap. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_mesh/uv_unwrap",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "object_name, method"
+        }
+      ]
+    },
+    {
+      "name": "physics_sim_add_force_field",
+      "description": "Create a new add force field. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_physics_sim/add_force_field",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "physics_sim_bake_fluid",
+      "description": "Create a new bake fluid. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_physics_sim/bake_fluid",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "physics_sim_configure_physics",
+      "description": "Create a new configure physic. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_physics_sim/configure_physics",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "physics_sim_setup_cloth",
+      "description": "Create a new setup cloth. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_physics_sim/setup_cloth",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "physics_sim_setup_rigid_body",
+      "description": "Create a new setup rigid body. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_physics_sim/setup_rigid_body",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "python_exec_execute",
+      "description": "Create a new execute blender python. Required: code.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/execute_blender_python",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "code",
+          "type": "string",
+          "location": "body",
+          "description": "raw Python source to exec inside Blender",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "render_pipeline_bake_textures",
+      "description": "Create a new bake texture. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_render_pipeline/bake_textures",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "render_pipeline_export_unity_fbx",
+      "description": "Create a new export unity fbx. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_render_pipeline/export_unity_fbx",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "render_pipeline_generate_lods",
+      "description": "Create a new generate lod. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_render_pipeline/generate_lods",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "render_pipeline_render_anim",
+      "description": "Create a new render anim. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_render_pipeline/render_anim",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "render_pipeline_render_image",
+      "description": "Create a new render image. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_render_pipeline/render_image",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "render_pipeline_vfx_shadow_catcher",
+      "description": "Create a new vfx shadow catcher. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_render_pipeline/vfx_shadow_catcher",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "render_pipeline_vfx_tracking",
+      "description": "Create a new vfx tracking. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_render_pipeline/vfx_tracking",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "rigging_anim_apply_hair_groom",
+      "description": "Create a new apply hair groom. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_rigging_anim/apply_hair_groom",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "rigging_anim_create_armature",
+      "description": "Create a new create armature. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_rigging_anim/create_armature",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "rigging_anim_create_hair_curves",
+      "description": "Create a new create hair curve. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_rigging_anim/create_hair_curves",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "rigging_anim_pose_bone",
+      "description": "Create a new pose bone. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_rigging_anim/pose_bone",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "rigging_anim_set_keyframe",
+      "description": "Create a new set keyframe. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_rigging_anim/set_keyframe",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "rigging_anim_setup_humanoid_rig",
+      "description": "Create a new setup humanoid rig. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_rigging_anim/setup_humanoid_rig",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "rigging_anim_setup_ik",
+      "description": "Create a new setup ik. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_rigging_anim/setup_ik",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "rigging_anim_timeline_range",
+      "description": "Create a new timeline range. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_rigging_anim/timeline_range",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "rigging_anim_turntable",
+      "description": "Create a new turntable. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_rigging_anim/turntable",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "scene_busy",
+      "description": "Create a new busy.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/busy",
+      "no_auth": true,
+      "params": []
+    },
+    {
+      "name": "scene_checkpoint_create",
+      "description": "Create a new checkpoint create. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/checkpoint_create",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "checkpoint label"
+        }
+      ]
+    },
+    {
+      "name": "scene_checkpoint_list",
+      "description": "Create a new checkpoint list.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/checkpoint_list",
+      "no_auth": true,
+      "params": []
+    },
+    {
+      "name": "scene_checkpoint_restore",
+      "description": "Create a new checkpoint restore. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/checkpoint_restore",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "checkpoint id to restore"
+        }
+      ]
+    },
+    {
+      "name": "scene_collection",
+      "description": "Create a new collection. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/collection",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "collection management args"
+        }
+      ]
+    },
+    {
+      "name": "scene_hierarchy",
+      "description": "Create a new hierarchy. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/hierarchy",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "collection_path, empty-parent hierarchy over object set"
+        }
+      ]
+    },
+    {
+      "name": "scene_info",
+      "description": "Create a new info.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/info",
+      "no_auth": true,
+      "params": []
+    },
+    {
+      "name": "scene_job_cancel",
+      "description": "Create a new job cancel. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/job_cancel",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "job_id"
+        }
+      ]
+    },
+    {
+      "name": "scene_job_list",
+      "description": "Create a new job list.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/job_list",
+      "no_auth": true,
+      "params": []
+    },
+    {
+      "name": "scene_job_status",
+      "description": "Create a new job status. Optional: params.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/job_status",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "params",
+          "type": "string",
+          "location": "body",
+          "description": "job_id"
+        }
+      ]
+    },
+    {
+      "name": "scene_performance",
+      "description": "Create a new performance.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/performance",
+      "no_auth": true,
+      "params": []
+    },
+    {
+      "name": "scene_purge_orphans",
+      "description": "Create a new purge orphan.",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/purge_orphans",
+      "no_auth": true,
+      "params": []
+    },
+    {
+      "name": "scene_regen",
+      "description": "Create a new regen. Optional: lang, element, use_vision (plus 2 more).",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/blender_scene/regen",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "lang",
+          "type": "string",
+          "location": "body",
+          "description": "target language, e.g. it"
+        },
+        {
+          "name": "element",
+          "type": "string",
+          "location": "body",
+          "description": "optional single element to rename"
+        },
+        {
+          "name": "use_vision",
+          "type": "string",
+          "location": "body",
+          "description": "use VLM to inspect geometry for naming"
+        },
+        {
+          "name": "max_vision_renames",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "vision_model",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "search_online_assets_search",
+      "description": "Create a new search online asset. Required: query. Optional: asset_type, providers, limit (plus 1 more).",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/search_online_assets",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "query",
+          "type": "string",
+          "location": "body",
+          "required": true
+        },
+        {
+          "name": "asset_type",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "providers",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "limit",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "free_only",
+          "type": "string",
+          "location": "body"
+        }
+      ]
+    },
+    {
+      "name": "simplify_geometry_simplify",
+      "description": "Create a new simplify geometry. Required: object_name. Optional: target_verts, max_deviation_pct, allow_new_holes (plus 1 more).",
+      "description_source": "generated",
+      "method": "POST",
+      "path": "/simplify_geometry",
+      "no_auth": true,
+      "params": [
+        {
+          "name": "object_name",
+          "type": "string",
+          "location": "body",
+          "required": true
+        },
+        {
+          "name": "target_verts",
+          "type": "string",
+          "location": "body"
+        },
+        {
+          "name": "max_deviation_pct",
+          "type": "string",
+          "location": "body",
+          "description": "default 2.0"
+        },
+        {
+          "name": "allow_new_holes",
+          "type": "string",
+          "location": "body",
+          "description": "default 0"
+        },
+        {
+          "name": "rollback_on_failure",
+          "type": "string",
+          "location": "body",
+          "description": "default true"
+        }
+      ]
+    }
+  ]
+}
