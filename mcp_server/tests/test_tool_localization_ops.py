@@ -21,7 +21,18 @@ _STRUCTURAL_TREE = {
             "renamed": True,
             "objects_count": 1,
             "is_empty_node": False,
-            "objects": [{"name": "Chair_Mesh", "type": "MESH", "parent": "Arredamento"}],
+            # Shape must match what the Blender-side _regen_object() actually
+            # emits: old_name/new_name/type/renamed/parent -- there is no bare
+            # "name" key. The vision pass targets the post-rename new_name.
+            "objects": [
+                {
+                    "old_name": "Chair_Mesh",
+                    "new_name": "Chair_Mesh",
+                    "type": "MESH",
+                    "renamed": False,
+                    "parent": "Arredamento",
+                }
+            ],
             "children": [],
         },
         {
@@ -163,7 +174,14 @@ async def test_regen_names_respects_max_vision_renames_cap(monkeypatch):
         "objects_count": 0,
         "is_empty_node": False,
         "objects": [
-            {"name": f"Part_{i}", "type": "MESH", "parent": None} for i in range(5)
+            {
+                "old_name": f"Part_{i}",
+                "new_name": f"Part_{i}",
+                "type": "MESH",
+                "renamed": False,
+                "parent": None,
+            }
+            for i in range(5)
         ],
         "children": [],
     }

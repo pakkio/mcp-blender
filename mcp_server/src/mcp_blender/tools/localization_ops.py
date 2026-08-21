@@ -17,7 +17,7 @@ from ..vlm import VLMError, critique_image, extract_png_bytes, is_configured
 
 # Mirrors extension/tools/localization_ops.py's CATEGORY_TRANSLATIONS keys --
 # only used to turn a lang code into a display name for the vision prompt.
-LANG_DISPLAY_NAMES = {"it": "Italian"}
+LANG_DISPLAY_NAMES = {"it": "Italian", "en": "English"}
 
 _DEFAULT_MAX_VISION_RENAMES = 15
 
@@ -37,10 +37,28 @@ def _collect_mesh_objects(node: dict) -> list[dict]:
     found = []
     for obj in node.get("objects", []):
         if obj.get("type") == "MESH":
-            found.append({"name": obj["name"], "category": node.get("new_name")})
+            found.append({"name": obj["new_name"], "category": node.get("new_name")})
     for child in node.get("children", []):
         found.extend(_collect_mesh_objects(child))
     return found
+
+
+def _mesh_candidates(structural: dict) -> list[dict]:
+    """MESH leaves to offer the vision pass, from either report shape.
+
+    regen_element_names only returns a "root" collection tree when it was
+    scoped to a collection/scene; scoping it to a plain object instead
+    (element=<object name>) returns a flat "objects" list and no "root" at
+    all, so reaching for structural["root"] unconditionally raised KeyError.
+    """
+    root = structural.get("root")
+    if root:
+        return _collect_mesh_objects(root)
+    return [
+        {"name": obj["new_name"], "category": None}
+        for obj in structural.get("objects", [])
+        if obj.get("type") == "MESH"
+    ]
 
 
 def _sanitize_vision_name(text: str) -> str:
@@ -97,7 +115,7 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
                 vision_note = "use_vision requested but OPENROUTER_API_KEY is not set -- structural pass only."
             else:
                 lang_name = LANG_DISPLAY_NAMES.get(params.lang, params.lang)
-                candidates = _collect_mesh_objects(structural["root"])[: params.max_vision_renames]
+                candidates = _mesh_candidates(structural)[: params.max_vision_renames]
                 async with client_status.track(bridge, f"Naming objects visually ({lang_name})...") as set_status:
                     for i, candidate in enumerate(candidates, 1):
                         obj_name = candidate["name"]
@@ -144,7 +162,7 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
             "success": True,
             "message": structural["message"],
             "lang": params.lang,
-            "structural": structural["root"],
+            "structural": structural.get("root") or {"objects": structural.get("objects", [])},
             "vision_used": params.use_vision and is_configured(),
             "vision_renames": vision_renames,
             "vision_note": vision_note,

@@ -54,7 +54,8 @@ CATEGORY_TRANSLATIONS = {
         "vehicle": "Veicolo",
         "truck": "Camion",
         "boat": "Barca",
-        "plane": "Aereo",
+        # "plane" is defined once, in Primitives below, as the Blender plane
+        # primitive ("Piano") -- far more common in part names than "Aereo".
         "tree": "Albero",
         "trees": "Alberi",
         "plant": "Pianta",
@@ -64,14 +65,14 @@ CATEGORY_TRANSLATIONS = {
         "bush": "Cespuglio",
         "rock": "Roccia",
         "rocks": "Rocce",
-        "stone": "Pietra",
         "box": "Scatola",
         "boxes": "Scatole",
         "crate": "Cassa",
         "barrel": "Barile",
         "bottle": "Bottiglia",
         "cup": "Tazza",
-        "glass": "Bicchiere",
+        # "glass" is defined once, in Materials below, as "Vetro" -- the
+        # material sense dominates in 3D part names over the drinking vessel.
         "plate": "Piatto",
         "door": "Porta",
         "doors": "Porte",
@@ -103,7 +104,10 @@ CATEGORY_TRANSLATIONS = {
         "mirror": "Specchietto",
         "seat": "Sedile",
         "seats": "Sedili",
-        "back": "Schienale",
+        # NOTE: bare "back" is defined once, below, as the directional
+        # "posteriore". The furniture sense lives on "backrest" -- defining
+        # "back": "Schienale" here too would be silently shadowed by the later
+        # key and never fire.
         "backrest": "Schienale",
         "arm": "Braccio",
         "armrest": "Bracciolo",
@@ -111,7 +115,7 @@ CATEGORY_TRANSLATIONS = {
         "leg": "Gamba",
         "legs": "Gambe",
         "base": "Base",
-        "top": "Piano",
+        # "top" is defined once, below, as the directional "superiore".
         "frame": "Telaio",
         "handle": "Maniglia",
         "handles": "Maniglie",
@@ -168,7 +172,6 @@ CATEGORY_TRANSLATIONS = {
         "perekladini": "Traverse",
         "setka": "Rete",
         "bolti": "Bulloni",
-        "bolt": "Bullone",
         "fixator": "Fissaggio",
         "koleso": "Ruota",
         "kolesa": "Ruote",
@@ -744,6 +747,49 @@ def _duplicate_and_combine(target_objs: list, anchor_obj, original_name: str):
     return dup_obj
 
 
+def _piece_center(obj) -> list[float]:
+    """World-space center of a separated piece's actual geometry.
+
+    bpy.ops.mesh.separate() does NOT recompute object origins -- every piece
+    inherits the source object's transform, so obj.location is byte-identical
+    across all of them. Using it as the part "center" fed the classifier a
+    constant, which collapsed _cluster_by_proximity into a single group and
+    stripped the LLM of the spatial signal its prompt says to rely on. Derive
+    the center from the bounding box instead, which is genuinely per-piece.
+    """
+    from mathutils import Vector
+
+    if not obj.data or not obj.data.vertices:
+        return [round(c, 3) for c in obj.location]
+    mw = obj.matrix_world
+    corners = [mw @ Vector(c) for c in obj.bound_box]
+    return [
+        round(sum(c[axis] for c in corners) / len(corners), 3)
+        for axis in range(3)
+    ]
+
+
+def _piece_materials(obj) -> list[str]:
+    """Materials actually used by this piece's faces.
+
+    separate() copies the whole material slot list onto every piece, so
+    obj.data.materials is identical for all of them -- another constant the
+    classifier was being asked to discriminate on. Resolve the slots the
+    polygons genuinely reference instead.
+    """
+    mesh = obj.data
+    if not mesh or not mesh.materials:
+        return []
+    used_slots = {p.material_index for p in mesh.polygons}
+    names = []
+    for slot_idx in sorted(used_slots):
+        if 0 <= slot_idx < len(mesh.materials):
+            mat = mesh.materials[slot_idx]
+            if mat and mat.name not in names:
+                names.append(mat.name)
+    return names
+
+
 def _cluster_by_proximity(parts_info: list[dict], threshold_ratio: float = 0.18) -> list[list[int]]:
     """Union-find spatial clustering of part centers, used by the no-LLM
     heuristic fallback. Grouping purely by material (the old fallback) dumps
@@ -756,7 +802,11 @@ def _cluster_by_proximity(parts_info: list[dict], threshold_ratio: float = 0.18)
     if n == 0:
         return []
     centers = [tuple(p["center"]) for p in parts_info]
-    xs, ys, zs = (c[0] for c in centers), (c[1] for c in centers), (c[2] for c in centers)
+    # Materialize as lists: generators here would be exhausted by the min()
+    # calls, making the following max() calls raise ValueError on every run.
+    xs = [c[0] for c in centers]
+    ys = [c[1] for c in centers]
+    zs = [c[2] for c in centers]
     diag = math.dist((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
     threshold = max(diag * threshold_ratio, 1e-6)
 
@@ -851,6 +901,11 @@ class SeparateLogicalAreasTool(ToolBase):
         # Step 2: Try separating by loose parts first
         bpy.ops.object.mode_set(mode='EDIT')
         bpy.ops.mesh.select_all(action='SELECT')
+        # Weld coincident-but-unshared vertices (e.g. UV seams on the face/hands/ears
+        # in a raw OBJ import) before separating -- otherwise mesh.separate(LOOSE)
+        # treats every seam as a real disconnection and chops off stray pieces of an
+        # otherwise-continuous body alongside genuinely separate meshes like clothes.
+        bpy.ops.mesh.remove_doubles(threshold=0.0001)
         bpy.ops.mesh.separate(type='LOOSE')
         bpy.ops.object.mode_set(mode='OBJECT')
 
@@ -880,8 +935,8 @@ class SeparateLogicalAreasTool(ToolBase):
             parts_info.append({
                 "index": idx,
                 "name": obj.name,
-                "center": [round(c, 3) for c in obj.location],
-                "materials": [mat.name for mat in obj.data.materials if mat]
+                "center": _piece_center(obj),
+                "materials": _piece_materials(obj),
             })
 
         # Step 4: Call LLM to classify into medium groups + micro names
@@ -914,9 +969,7 @@ class SeparateLogicalAreasTool(ToolBase):
         groups = classification.get("groups", {})
         names = classification.get("names", {})
 
-        report_groups = []
-        for group_name, indices in groups.items():
-            # Medium tier: one Empty per logical sub-assembly
+        def _make_group_empty(group_name: str):
             bpy.ops.object.empty_add(type='PLAIN_AXES', location=anchor_obj.location)
             group_empty = bpy.context.active_object
             group_empty.name = group_name
@@ -930,26 +983,57 @@ class SeparateLogicalAreasTool(ToolBase):
                         bpy.context.scene.collection.objects.unlink(group_empty)
                     except Exception:
                         pass
+            return group_empty
+
+        # The classifier is told every index must appear in exactly one group,
+        # but an LLM will still drop or double-assign some. Track what actually
+        # got placed: an unassigned piece would otherwise be left unparented,
+        # still named "<name>_separate_temp.NNN" and visible in the scene as
+        # stray debris, while a double-assigned one would be reported under two
+        # groups despite only ever living under the last one to claim it.
+        assigned: set[int] = set()
+
+        report_groups = []
+        for group_name, indices in groups.items():
+            # Medium tier: one Empty per logical sub-assembly
+            group_empty = _make_group_empty(group_name)
 
             group_pieces = []
             for idx in indices:
                 try:
                     obj_idx = int(idx)
-                    if 0 <= obj_idx < len(separated_pieces):
-                        # Micro tier: the individual named part
-                        piece_obj = separated_pieces[obj_idx]
-                        new_name = names.get(str(idx), f"Part_{idx}")
-                        piece_obj.name = new_name
-                        if piece_obj.data:
-                            piece_obj.data.name = new_name
-                        piece_obj.parent = group_empty
-                        group_pieces.append(piece_obj.name)
-                except (ValueError, TypeError, IndexError):
-                    pass
+                except (ValueError, TypeError):
+                    continue
+                if not (0 <= obj_idx < len(separated_pieces)) or obj_idx in assigned:
+                    continue
+                # Micro tier: the individual named part
+                piece_obj = separated_pieces[obj_idx]
+                new_name = names.get(str(obj_idx)) or f"Part_{obj_idx}"
+                piece_obj.name = new_name
+                if piece_obj.data:
+                    piece_obj.data.name = new_name
+                piece_obj.parent = group_empty
+                assigned.add(obj_idx)
+                group_pieces.append(piece_obj.name)
             report_groups.append({
                 "group": group_name,
                 "parts": group_pieces
             })
+
+        leftovers = [i for i in range(len(separated_pieces)) if i not in assigned]
+        if leftovers:
+            misc_name = f"{original_name}_Varie" if lang == "it" else f"{original_name}_Misc"
+            misc_empty = _make_group_empty(misc_name)
+            misc_pieces = []
+            for obj_idx in leftovers:
+                piece_obj = separated_pieces[obj_idx]
+                new_name = names.get(str(obj_idx)) or f"Part_{obj_idx}"
+                piece_obj.name = new_name
+                if piece_obj.data:
+                    piece_obj.data.name = new_name
+                piece_obj.parent = misc_empty
+                misc_pieces.append(piece_obj.name)
+            report_groups.append({"group": misc_name, "parts": misc_pieces})
 
         for obj in target_objs:
             obj.hide_viewport = True
@@ -964,7 +1048,7 @@ class SeparateLogicalAreasTool(ToolBase):
             "success": True,
             "message": (
                 f"Successfully separated '{original_name}'{combined_note} into {len(separated_pieces)} parts "
-                f"across {len(groups)} logical groups (classified via {classifier_note})."
+                f"across {len(report_groups)} logical groups (classified via {classifier_note})."
                 f"{prompt_note}"
             ),
             "root_object": root_empty.name,
