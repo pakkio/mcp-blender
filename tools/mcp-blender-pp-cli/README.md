@@ -37,6 +37,10 @@ LLM/dictionary-assisted renaming (env vars: `OPENROUTER_API_KEY` +
 `OPENROUTER_VISION_MODEL` for vision commands, `SKETCHFAB_API_TOKEN` for
 Sketchfab downloads).
 
+For the narrative version of how this CLI got built -- what broke, why, and
+what it taught about generating code against a target the generator wasn't
+designed for -- read [`BUILD_LOG.md`](BUILD_LOG.md).
+
 ---
 
 The sections below are printing-press's generated install docs, written for
