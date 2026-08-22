@@ -385,7 +385,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
         elif action == "ai_generate":
             provider = (p.get("provider", "meshy") or "meshy").lower()
             reduction = (p.get("reduction_method", "simplify") or "simplify").lower()
-            target_verts = int(p.get("target_vertices", 30000))
+            target_verts = int(p.get("target_vertices", 50000))
 
             image_path = p.get("image_path")
             if image_path:

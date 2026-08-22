@@ -49,8 +49,15 @@ class TrellisProvider:
         ]
 
     async def download(
-        self, asset_id: str, dest_dir: str, image_path: str | None = None
+        self,
+        asset_id: str,
+        dest_dir: str,
+        image_path: str | None = None,
+        target_polycount: int | None = None,
     ) -> DownloadedAsset:
+        # target_polycount is accepted for protocol conformance and ignored:
+        # the Trellis endpoint exposes no server-side polygon budget, so the
+        # reduction happens locally as before.
         cached = find_cached_file(self.name, asset_id)
         if cached is not None:
             return DownloadedAsset(

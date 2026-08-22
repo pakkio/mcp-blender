@@ -97,6 +97,79 @@ async def test_meshy_image_download_posts_data_uri_and_saves_glb(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_meshy_image_download_requests_server_side_remesh(monkeypatch, tmp_path, png_file):
+    """A polygon budget must reach Meshy's own remesher: without it a single
+    image-to-3D generation comes back at ~2M triangles, which then has to be
+    downloaded, imported and locally reduced."""
+    monkeypatch.setenv("MESHY_API_KEY", "tok")
+    monkeypatch.setattr("mcp_blender.assets.providers.meshy.find_cached_file", lambda *a, **k: None)
+
+    posted = {}
+
+    async def fake_post(self, url, headers=None, json=None):
+        posted["json"] = json
+        return httpx.Response(200, json={"result": "task-img-2"}, request=httpx.Request("POST", url))
+
+    async def fake_get(self, url, **kwargs):
+        if url.endswith("/task-img-2"):
+            return httpx.Response(
+                200,
+                json={"status": "SUCCEEDED", "model_urls": {"glb": "https://x/model.glb"}},
+                request=httpx.Request("GET", url),
+            )
+        return httpx.Response(200, content=b"glTF-model-bytes", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    result = await MeshyProvider().download(
+        "meshy_img_abc12345", str(tmp_path), image_path=str(png_file), target_polycount=120000
+    )
+
+    assert posted["json"]["should_remesh"] is True
+    assert posted["json"]["target_polycount"] == 120000
+    assert result.filepath.endswith(".glb")
+
+
+@pytest.mark.asyncio
+async def test_meshy_image_budget_is_part_of_the_cache_key(monkeypatch, tmp_path, png_file):
+    """The same picture at a different budget is a different model; reusing
+    the cached one would silently ignore the new budget."""
+    monkeypatch.setenv("MESHY_API_KEY", "tok")
+    seen = []
+
+    def fake_cached(provider, asset_id):
+        seen.append(asset_id)
+        return None
+
+    monkeypatch.setattr("mcp_blender.assets.providers.meshy.find_cached_file", fake_cached)
+
+    async def fake_post(self, url, headers=None, json=None):
+        return httpx.Response(200, json={"result": "task-img-3"}, request=httpx.Request("POST", url))
+
+    async def fake_get(self, url, **kwargs):
+        if url.endswith("/task-img-3"):
+            return httpx.Response(
+                200,
+                json={"status": "SUCCEEDED", "model_urls": {"glb": "https://x/model.glb"}},
+                request=httpx.Request("GET", url),
+            )
+        return httpx.Response(200, content=b"glTF", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    await MeshyProvider().download(
+        "meshy_img_abc12345", str(tmp_path), image_path=str(png_file), target_polycount=100000
+    )
+    await MeshyProvider().download(
+        "meshy_img_abc12345", str(tmp_path), image_path=str(png_file), target_polycount=200000
+    )
+
+    assert seen == ["meshy_img_abc12345_p100000", "meshy_img_abc12345_p200000"]
+
+
+@pytest.mark.asyncio
 async def test_meshy_image_without_token_raises_actionable(monkeypatch, tmp_path, png_file):
     monkeypatch.delenv("MESHY_API_KEY", raising=False)
     monkeypatch.setattr("mcp_blender.assets.providers.meshy.find_cached_file", lambda *a, **k: None)
@@ -149,6 +222,7 @@ async def test_tripo_image_download_and_polling(monkeypatch, tmp_path, png_file)
     result = await TripoProvider().download("tripo_img_abc12345", str(tmp_path), image_path=str(png_file))
 
     assert posted["json"]["type"] == "image_to_model"
+    assert "face_limit" not in posted["json"]  # no budget asked for, none sent
     assert posted["json"]["file"].startswith("data:image/png;base64,")
     assert polls["count"] == 2  # 'running' then 'success'
     assert result.filepath.endswith(".glb")
@@ -204,7 +278,8 @@ async def test_ai_generate_routes_image_path_through_import(monkeypatch, tmp_pat
     class _FakeProvider:
         name = "meshy"
 
-        async def download(self, asset_id, dest_dir, image_path=None):
+        async def download(self, asset_id, dest_dir, image_path=None, target_polycount=None):
+            captured["target_polycount"] = target_polycount
             return await fake_download(self, asset_id, dest_dir, image_path)
 
         async def search(self, *a):

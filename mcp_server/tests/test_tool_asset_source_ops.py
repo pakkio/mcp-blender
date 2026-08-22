@@ -15,6 +15,7 @@ class _FakeProvider:
         self._hits = hits or []
         self._download_result = download_result
         self._download_error = download_error
+        self.last_target_polycount = None
 
     def is_available(self):
         return True
@@ -22,7 +23,8 @@ class _FakeProvider:
     async def search(self, query, asset_type, limit):
         return self._hits[:limit]
 
-    async def download(self, asset_id, dest_dir, image_path=None):
+    async def download(self, asset_id, dest_dir, image_path=None, target_polycount=None):
+        self.last_target_polycount = target_polycount
         if self._download_error:
             raise self._download_error
         return self._download_result
@@ -111,6 +113,66 @@ async def test_import_online_asset_happy_path_uses_simplify_geometry(monkeypatch
     assert result["decimation_applied"]["tri_count_before"] == 50000
     assert result["decimation_applied"]["objects"]["Chair_Mesh"]["method"] == "simplify_geometry"
     assert result["license"] == "CC0"
+
+
+@pytest.mark.asyncio
+async def test_import_online_asset_forwards_polygon_budget_to_provider(monkeypatch, tmp_path):
+    """The budget must reach the provider, not just the local reduction: an
+    image-to-3D provider that can remesh server-side should return a model
+    near the budget instead of a multi-million-triangle raw generation that
+    has to be downloaded and reduced here."""
+    downloaded = DownloadedAsset(
+        filepath=str(tmp_path / "cat.glb"), provider="meshy", asset_id="meshy_img_abc",
+        license="User Generated", attribution="generated", from_cache=False,
+    )
+    (tmp_path / "cat.glb").write_bytes(b"glb-bytes")
+    provider = _FakeProvider("meshy", download_result=downloaded)
+
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+
+    bridge = AsyncMock()
+
+    async def send_request(method, params, timeout=None):
+        if method == "import_file":
+            return {"success": True, "imported_objects": ["Cat"]}
+        if method == "get_object_info":
+            return {
+                "success": True,
+                "type": "MESH",
+                "parent": None,
+                "dimensions": [1.0, 1.0, 1.0],
+                "mesh_data": {"polygons_count": 50000, "vertices_count": 26000},
+            }
+        return {"success": True}
+
+    bridge.send_request.side_effect = send_request
+    _search_fn, import_fn = register_asset_source_tools(FakeMCP(), bridge)
+
+    await import_fn(asset_id="meshy_img_abc", provider="meshy", target_poly_budget=50000)
+    # Headroom over the budget, so the local form-preserving pass still has
+    # something to spend on shape rather than merely hitting the count.
+    assert provider.last_target_polycount == 100000
+
+
+@pytest.mark.asyncio
+async def test_import_online_asset_without_budget_leaves_provider_default(monkeypatch, tmp_path):
+    downloaded = DownloadedAsset(
+        filepath=str(tmp_path / "cat.glb"), provider="meshy", asset_id="meshy_img_abc",
+        license="User Generated", attribution="generated", from_cache=False,
+    )
+    (tmp_path / "cat.glb").write_bytes(b"glb-bytes")
+    provider = _FakeProvider("meshy", download_result=downloaded)
+
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+
+    bridge = AsyncMock()
+    bridge.send_request.return_value = {"success": True, "imported_objects": ["Cat"]}
+    _search_fn, import_fn = register_asset_source_tools(FakeMCP(), bridge)
+
+    await import_fn(asset_id="meshy_img_abc", provider="meshy")
+    assert provider.last_target_polycount is None
 
 
 @pytest.mark.asyncio

@@ -14,19 +14,86 @@ where the surface is flat and dense (limited dissolve, then curvature-
 weighted Decimate), then measures what it produced (two-sided surface
 deviation + new-hole count) and rolls back rather than handing back a
 mesh that silently lost a feature.
+
+Everything here runs inside one blocking execute() on Blender's main thread,
+and the inputs are frequently enormous (a Meshy image-to-3D result arrives at
+~1M vertices / 2M triangles). Two consequences shape the code below: every
+per-element pass goes through foreach_get/numpy rather than a Python loop,
+and each phase reports to the viewport HUD with a forced redraw, because a UI
+that cannot repaint while this runs is indistinguishable from a hung Blender.
 """
 
 import math
+import time
 
 import bmesh
 import bpy
+import numpy as np
 from mathutils.bvhtree import BVHTree
 
 from . import simplify_geometry_planner as planner
 from .base import ToolBase
 
-_MAX_RATIO_ITERATIONS = 3
+_MAX_RATIO_ITERATIONS = 4
 _DEVIATION_SAMPLE_LIMIT = 4000
+# Exact coincident-vertex and shell counts are diagnostics only (the quality
+# gate uses neither), and both cost more than the rest of _analyze on a dense
+# mesh -- above this they are reported as None, i.e. "not measured", rather
+# than as a 0 that reads like "measured, none found".
+_ANALYZE_EXACT_LIMIT = 60_000
+# Above this many source faces, deviation is measured one-sided; see
+# _measure_deviation.
+_DEVIATION_TWO_SIDED_MAX_FACES = 400_000
+# A mesh further than this multiple above its budget gets a cheap unweighted
+# collapse into range before the form-preserving pass runs. See _fast_prepass.
+_PREPASS_FACTOR = 8
+# Distinct weight levels written to the protection vertex group. Decimate's
+# influence factor has no use for more resolution than this, and each level
+# costs exactly one RNA call instead of one per vertex.
+_WEIGHT_BUCKETS = 64
+_HUD_MIN_INTERVAL_S = 0.2
+
+
+class _Progress:
+    """Phase-by-phase HUD feedback for a run that can take minutes.
+
+    simplify_geometry is called from inside a single blocking execute() (the
+    viewport panel's AI Generate button reaches it through super_import), so
+    Blender's event loop never runs while it works. A plain tag_redraw()
+    therefore paints nothing until the whole run is over, which is why the
+    old behaviour was a HUD frozen on the caller's "Simplifying..." frame for
+    the entire reduction. Each phase() pushes through
+    push_hud_update(force_redraw=True), throttled so the forced redraws do
+    not themselves become a cost, and carries elapsed seconds so that even a
+    long C-level step visibly ticks.
+    """
+
+    def __init__(self, object_name, verts, base=0.0, span=100.0, enabled=True):
+        self.enabled = bool(enabled) and not bpy.app.background
+        self.label = f"Simplify '{object_name}' ({verts:,} verts)"
+        self.base = float(base)
+        self.span = float(span)
+        self.started = time.time()
+        self._last_push = 0.0
+
+    def phase(self, status, fraction, force=False):
+        if not self.enabled:
+            return
+        now = time.time()
+        if not force and now - self._last_push < _HUD_MIN_INTERVAL_S:
+            return
+        self._last_push = now
+        try:
+            from .progress_hud_ops import push_hud_update
+
+            push_hud_update(
+                title=self.label,
+                status=f"{status}  [{now - self.started:.0f}s]",
+                progress_percent=self.base + self.span * max(0.0, min(1.0, fraction)),
+                force_redraw=True,
+            )
+        except Exception:
+            self.enabled = False
 
 
 class SimplifyGeometryTool(ToolBase):
@@ -48,8 +115,16 @@ class SimplifyGeometryTool(ToolBase):
         if not obj or obj.type != "MESH":
             return {"success": False, "message": f"Object '{object_name}' not found or not a MESH"}
 
+        blocked = _unusable_context(obj)
+        if blocked:
+            return {"success": False, "message": blocked}
+
         current_verts = len(obj.data.vertices)
-        current_tris = sum(max(0, len(p.vertices) - 2) for p in obj.data.polygons)
+        # Only a TRIANGLES budget needs the triangle count, and counting them
+        # is a pass over every polygon in the mesh -- don't pay for it on the
+        # VERTICES/preset calls that never look at it.
+        unit = str(params.get("target_unit", "VERTICES")).upper()
+        current_tris = _triangle_count(obj.data) if unit == "TRIANGLES" else 0
 
         target_verts, error = planner.resolve_target_vertices(
             target=params.get("target"),
@@ -85,6 +160,19 @@ class SimplifyGeometryTool(ToolBase):
         allow_new_holes = int(params.get("allow_new_holes", 0))
         rollback_on_failure = bool(params.get("rollback_on_failure", True))
 
+        # Private convention with callers that drive the HUD themselves (see
+        # super_import_ops): map this run's 0-100% onto their slice of the bar
+        # instead of fighting them for it.
+        hud = params.get("_hud") or {}
+        progress = _Progress(
+            object_name,
+            current_verts,
+            base=hud.get("base", 0.0),
+            span=hud.get("span", 100.0),
+            enabled=hud.get("enabled", True),
+        )
+
+        progress.phase("Analyzing mesh...", 0.02, force=True)
         analysis = _analyze(obj)
 
         if dry_run:
@@ -102,22 +190,44 @@ class SimplifyGeometryTool(ToolBase):
 
         original_mesh_copy = obj.data.copy()
         original_verts_count = current_verts
+        # Shape keys cannot survive a topology change. Clearing them is not
+        # something a caller can discover afterwards, so it gets reported.
+        had_shape_keys = bool(obj.data.shape_keys)
 
-        bpy.context.view_layer.objects.active = obj
-        if obj.data.shape_keys:
+        view_layer = bpy.context.view_layer
+        prev_active = view_layer.objects.active
+        prev_hide_viewport = obj.hide_viewport
+        try:
+            prev_hidden = obj.hide_get()
+        except Exception:
+            prev_hidden = False
+
+        # The ratio solve reads evaluated geometry off the depsgraph and the
+        # apply goes through an operator; both need the object visible and
+        # active. All three are restored in the finally below.
+        obj.hide_viewport = False
+        try:
+            obj.hide_set(False)
+        except Exception:
+            pass
+        view_layer.objects.active = obj
+        if had_shape_keys:
             obj.shape_key_clear()
 
         try:
+            diag = _bbox_diagonal(obj.data)
             bm = bmesh.new()
             bm.from_mesh(obj.data)
 
             repair_stats = None
             if repair:
-                repair_stats = _repair(bm, weld_factor=weld_factor)
+                progress.phase(f"Repairing {current_verts:,} vertices (weld, close gaps)...", 0.08, force=True)
+                repair_stats = _repair(bm, weld_factor=weld_factor, diag=diag)
 
             delimit = {"MATERIAL", "SHARP"}
             if preserve_uv:
                 delimit |= {"UV", "SEAM"}
+            progress.phase("Dissolving flat regions...", 0.22, force=True)
             dissolved = _dissolve_flat(bm, angle_limit_deg=sharp_angle, delimit=delimit)
 
             bm.to_mesh(obj.data)
@@ -126,7 +236,17 @@ class SimplifyGeometryTool(ToolBase):
 
             post_dissolve_verts = len(obj.data.vertices)
 
-            if post_dissolve_verts > target_verts:
+            prepass_stats = None
+            if post_dissolve_verts > target_verts * _PREPASS_FACTOR:
+                prepass_target = target_verts * _PREPASS_FACTOR
+                progress.phase(
+                    f"Pre-pass collapse {post_dissolve_verts:,} -> ~{prepass_target:,} vertices...",
+                    0.35,
+                    force=True,
+                )
+                prepass_stats = _fast_prepass(obj, prepass_target)
+
+            if len(obj.data.vertices) > target_verts:
                 collapse_stats = _weighted_collapse(
                     obj,
                     target_verts=target_verts,
@@ -134,12 +254,14 @@ class SimplifyGeometryTool(ToolBase):
                     tolerance=tolerance,
                     use_symmetry=use_symmetry,
                     symmetry_axis=symmetry_axis,
+                    progress=progress,
                 )
             else:
                 collapse_stats = {"applied": False, "iterations": 0}
 
             result_verts = len(obj.data.vertices)
 
+            progress.phase("Measuring surface deviation...", 0.9, force=True)
             deviation = _measure_deviation(original_mesh_copy, obj.data)
             new_boundary_edges = _count_boundary_edges(obj.data) - analysis["boundary_edges"]
             new_boundary_edges = max(0, new_boundary_edges)
@@ -152,6 +274,7 @@ class SimplifyGeometryTool(ToolBase):
             )
 
             if not gate["passed"] and rollback_on_failure:
+                progress.phase("Quality gate failed -- rolling back", 1.0, force=True)
                 obj.data.clear_geometry()  # release derived data before swapping the mesh block
                 obj.data = original_mesh_copy
                 obj.data.update()
@@ -176,6 +299,7 @@ class SimplifyGeometryTool(ToolBase):
                 }
 
             bpy.data.meshes.remove(original_mesh_copy)
+            progress.phase(f"Done: {original_verts_count:,} -> {result_verts:,} vertices", 1.0, force=True)
 
             return {
                 "success": True,
@@ -191,9 +315,11 @@ class SimplifyGeometryTool(ToolBase):
                 "analysis": analysis,
                 "repair": repair_stats,
                 "dissolved_vertices": dissolved,
+                "prepass": prepass_stats,
                 "collapse": collapse_stats,
                 "deviation": deviation,
                 "new_boundary_edges": new_boundary_edges,
+                "shape_keys_removed": had_shape_keys,
                 "gate": gate,
             }
         except Exception as exc:
@@ -204,94 +330,190 @@ class SimplifyGeometryTool(ToolBase):
                     obj.data.update()
                 except Exception:
                     pass
+            progress.phase(f"Failed: {exc}", 1.0, force=True)
             return {"success": False, "message": f"simplify_geometry failed: {exc}"}
+        finally:
+            obj.hide_viewport = prev_hide_viewport
+            try:
+                obj.hide_set(prev_hidden)
+            except Exception:
+                pass
+            try:
+                view_layer.objects.active = prev_active
+            except Exception:
+                pass
+
+
+def _unusable_context(obj):
+    """Preconditions the work below silently misbehaves without.
+
+    Writing a bmesh into a mesh that is open in Edit Mode corrupts it, and an
+    object outside the active view layer is not evaluated by the depsgraph at
+    all -- the ratio solve would read stale geometry and modifier_apply would
+    fail into the generic handler as an unexplained rollback.
+    """
+    if obj.mode != "OBJECT":
+        return (
+            f"'{obj.name}' is in {obj.mode} mode; simplify_geometry needs Object Mode "
+            "(writing to a mesh that is open for editing corrupts it)"
+        )
+    if obj.name not in bpy.context.view_layer.objects:
+        return (
+            f"'{obj.name}' is not in the active view layer (its collection is excluded, or it "
+            "belongs to another scene); the collapse solve needs it evaluated by the depsgraph"
+        )
+    return None
 
 
 def _analyze(obj):
-    """bmesh diagnosis of the input mesh: what a caller (and the quality
-    gate) need to know before touching anything."""
-    bm = bmesh.new()
-    bm.from_mesh(obj.data)
+    """Diagnosis of the input mesh: what a caller (and the quality gate) need
+    to know before touching anything.
 
-    boundary_edges = sum(1 for e in bm.edges if len(e.link_faces) == 1)
-    non_manifold_edges = sum(1 for e in bm.edges if len(e.link_faces) not in (1, 2))
-    loose_verts = sum(1 for v in bm.verts if not v.link_edges)
+    Edge topology comes from the loop->edge map: every face corner is one
+    loop, so counting how many loops reference each edge counts how many
+    faces touch it -- two C-level array reads instead of a Python pass over a
+    bmesh.
+    """
+    mesh = obj.data
+    face_counts = _edge_face_counts(mesh)
+    boundary_edges = int(np.count_nonzero(face_counts == 1))
+    non_manifold_edges = int(np.count_nonzero((face_counts != 1) & (face_counts != 2)))
 
-    coincident = 0
-    if len(bm.verts) < 60000:  # KDTree build cost; large meshes skip the exact count
-        from mathutils.kdtree import KDTree
+    edge_verts = _edge_vertices(mesh)
+    if len(edge_verts):
+        used = np.bincount(edge_verts.ravel(), minlength=len(mesh.vertices))
+        loose_verts = int(np.count_nonzero(used == 0))
+    else:
+        loose_verts = len(mesh.vertices)
 
-        kd = KDTree(len(bm.verts))
-        for i, v in enumerate(bm.verts):
-            kd.insert(v.co, i)
-        kd.balance()
-        seen = set()
-        for i, v in enumerate(bm.verts):
-            if i in seen:
-                continue
-            for _, j, dist in kd.find_range(v.co, 1e-5):
-                if j != i:
-                    coincident += 1
-                    seen.add(j)
-
-    shells = _count_shells(bm)
-
-    diag = _bbox_diagonal(bm)
-
-    bm.free()
-
+    exact = len(mesh.vertices) < _ANALYZE_EXACT_LIMIT
     return {
-        "vertices": len(obj.data.vertices),
-        "faces": len(obj.data.polygons),
-        "bbox_diagonal": round(diag, 6),
+        "vertices": len(mesh.vertices),
+        "faces": len(mesh.polygons),
+        "bbox_diagonal": round(_bbox_diagonal(mesh), 6),
         "boundary_edges": boundary_edges,
         "non_manifold_edges": non_manifold_edges,
         "loose_vertices": loose_verts,
-        "coincident_vertices": coincident,
-        "shells": shells,
+        # None, not 0: these are skipped on a dense mesh, and 0 would read as
+        # "measured, none found".
+        "coincident_vertices": _count_coincident(mesh) if exact else None,
+        "shells": _count_shells(mesh) if exact else None,
     }
 
 
-def _bbox_diagonal(bm):
-    if not bm.verts:
+def _vertex_coords(mesh):
+    co = np.empty(len(mesh.vertices) * 3, dtype=np.float64)
+    mesh.vertices.foreach_get("co", co)
+    return co.reshape(-1, 3)
+
+
+def _edge_vertices(mesh):
+    ev = np.empty(len(mesh.edges) * 2, dtype=np.int32)
+    mesh.edges.foreach_get("vertices", ev)
+    return ev.reshape(-1, 2)
+
+
+def _edge_face_counts(mesh):
+    """Number of faces touching each edge, indexed by edge index."""
+    n_loops = len(mesh.loops)
+    if n_loops == 0 or len(mesh.edges) == 0:
+        return np.zeros(len(mesh.edges), dtype=np.int64)
+    edge_idx = np.empty(n_loops, dtype=np.int32)
+    mesh.loops.foreach_get("edge_index", edge_idx)
+    return np.bincount(edge_idx, minlength=len(mesh.edges))
+
+
+def _triangle_count(mesh):
+    if not len(mesh.polygons):
+        return 0
+    loop_totals = np.empty(len(mesh.polygons), dtype=np.int32)
+    mesh.polygons.foreach_get("loop_total", loop_totals)
+    return int(np.maximum(loop_totals - 2, 0).sum())
+
+
+def _bbox_diagonal(mesh):
+    if not len(mesh.vertices):
         return 0.0
-    xs = [v.co.x for v in bm.verts]
-    ys = [v.co.y for v in bm.verts]
-    zs = [v.co.z for v in bm.verts]
-    dx, dy, dz = max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs)
-    return math.sqrt(dx * dx + dy * dy + dz * dz)
+    co = _vertex_coords(mesh)
+    return float(np.linalg.norm(co.max(axis=0) - co.min(axis=0)))
 
 
-def _count_shells(bm):
-    """Number of connected components, via flood fill over vertex links."""
-    unvisited = set(bm.verts)
-    shells = 0
-    while unvisited:
-        shells += 1
-        stack = [next(iter(unvisited))]
-        while stack:
-            v = stack.pop()
-            if v not in unvisited:
-                continue
-            unvisited.discard(v)
-            for e in v.link_edges:
-                other = e.other_vert(v)
-                if other in unvisited:
-                    stack.append(other)
-    return shells
+def _count_boundary_edges(mesh):
+    return int(np.count_nonzero(_edge_face_counts(mesh) == 1))
 
 
-def _repair(bm, weld_factor):
+def _boundary_vertex_mask(mesh):
+    """Vertices touching an edge that is not shared by exactly two faces --
+    hole rims and non-manifold junctions.
+
+    _curvature_weights used to assume these were already covered by its
+    "fewer than two incident faces" rule, but a vertex on the rim of a hole
+    normally has plenty of faces; only its *edges* are one-sided. That made
+    preserve_boundaries a no-op.
+    """
+    mask = np.zeros(len(mesh.vertices), dtype=bool)
+    edge_verts = _edge_vertices(mesh)
+    if not len(edge_verts):
+        return mask
+    open_edges = edge_verts[_edge_face_counts(mesh) != 2]
+    if len(open_edges):
+        mask[open_edges.ravel()] = True
+    return mask
+
+
+def _count_coincident(mesh):
+    from mathutils.kdtree import KDTree
+
+    coords = _vertex_coords(mesh).tolist()
+    kd = KDTree(len(coords))
+    for i, point in enumerate(coords):
+        kd.insert(point, i)
+    kd.balance()
+
+    coincident = 0
+    seen = set()
+    for i, point in enumerate(coords):
+        if i in seen:
+            continue
+        for _, j, _dist in kd.find_range(point, 1e-5):
+            if j != i:
+                coincident += 1
+                seen.add(j)
+    return coincident
+
+
+def _count_shells(mesh):
+    """Number of connected components over the edge graph, by union-find."""
+    n_verts = len(mesh.vertices)
+    if n_verts == 0:
+        return 0
+
+    parent = list(range(n_verts))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for a, b in _edge_vertices(mesh).tolist():
+        root_a, root_b = find(a), find(b)
+        if root_a != root_b:
+            parent[root_a] = root_b
+
+    return len({find(i) for i in range(n_verts)})
+
+
+def _repair(bm, weld_factor, diag):
     """Weld coincident verts, drop loose geometry, close pinhole gaps,
     recalc normals. Order matters: welding first is what turns split-at-seam
     shells back into one manifold surface, which is the actual fix for the
     "decimate produces holes" failure mode.
     """
-    diag = _bbox_diagonal(bm)
     dist = max(1e-6, weld_factor * diag) if diag > 0 else weld_factor
 
     before_verts = len(bm.verts)
-    weld_result = bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=dist)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=dist)
     welded = before_verts - len(bm.verts)
 
     loose_verts = [v for v in bm.verts if not v.link_edges]
@@ -335,82 +557,149 @@ def _dissolve_flat(bm, angle_limit_deg, delimit):
     return before - len(bm.verts)
 
 
-def _curvature_weights(obj):
-    """Per-vertex protection weight in [0, 1] from local curvature: the max
-    angle between a vertex's incident face normals. Flat surfaces score near
-    0 (safe to collapse), edges/corners/thin features score near 1.
+def _curvature_weights(mesh, preserve_boundaries):
+    """Per-vertex protection weight in [0, 1] from local curvature: flat
+    surfaces score near 0 (safe to collapse), edges/corners/thin features and
+    hole rims score near 1.
+
+    Vectorised form of "max angle between a vertex's incident face normals,
+    normalised by pi": the mean of k unit normals has length cos(theta/2) in
+    the two-face case, so 2*acos(|mean|)/pi reproduces that measure exactly
+    where a vertex has two faces and generalises to normal dispersion above
+    it -- without the per-vertex O(k^2) Python loop over mathutils angles
+    that dominated this function on a dense mesh.
+
+    Normals come from the loop triangles, so an n-gon contributes once per
+    triangle it decomposes into; that biases the mean slightly toward larger
+    faces, which is the direction you want anyway.
     """
-    bm = bmesh.new()
-    bm.from_mesh(obj.data)
-    bm.normal_update()
+    n_verts = len(mesh.vertices)
+    if n_verts == 0:
+        return np.zeros(0, dtype=np.float64)
 
-    weights = [0.0] * len(bm.verts)
-    for v in bm.verts:
-        if len(v.link_faces) < 2:
-            weights[v.index] = 1.0  # boundary / non-manifold vertex: always protect
-            continue
-        normals = [f.normal for f in v.link_faces]
-        max_angle = 0.0
-        for i in range(len(normals)):
-            for j in range(i + 1, len(normals)):
-                try:
-                    angle = normals[i].angle(normals[j])
-                except ValueError:
-                    angle = 0.0
-                max_angle = max(max_angle, angle)
-        weights[v.index] = min(1.0, max_angle / math.pi)
+    try:
+        mesh.calc_loop_triangles()
+    except Exception:
+        pass  # 4.1+ computes them on access
 
-    bm.free()
-    return weights
+    n_tris = len(mesh.loop_triangles)
+    if n_tris == 0:
+        return np.ones(n_verts, dtype=np.float64)
+
+    tris = np.empty(n_tris * 3, dtype=np.int32)
+    mesh.loop_triangles.foreach_get("vertices", tris)
+    tris = tris.reshape(-1, 3)
+
+    co = _vertex_coords(mesh)
+    normals = np.cross(co[tris[:, 1]] - co[tris[:, 0]], co[tris[:, 2]] - co[tris[:, 0]])
+    lengths = np.linalg.norm(normals, axis=1)
+    np.divide(normals, lengths[:, None], out=normals, where=lengths[:, None] > 1e-12)
+
+    accumulated = np.stack(
+        [
+            np.bincount(tris[:, 0], weights=normals[:, axis], minlength=n_verts)
+            + np.bincount(tris[:, 1], weights=normals[:, axis], minlength=n_verts)
+            + np.bincount(tris[:, 2], weights=normals[:, axis], minlength=n_verts)
+            for axis in range(3)
+        ],
+        axis=1,
+    )
+    face_counts = np.bincount(tris.ravel(), minlength=n_verts)
+
+    mean_length = np.linalg.norm(accumulated, axis=1) / np.maximum(face_counts, 1)
+    weights = 2.0 * np.arccos(np.clip(mean_length, 0.0, 1.0)) / math.pi
+    # Loose and single-face vertices carry no reliable curvature signal.
+    weights[face_counts < 2] = 1.0
+    if preserve_boundaries:
+        weights[_boundary_vertex_mask(mesh)] = 1.0
+    return np.clip(weights, 0.0, 1.0)
 
 
-def _weighted_collapse(obj, target_verts, preserve_boundaries, tolerance, use_symmetry, symmetry_axis):
+def _write_vertex_group(obj, name, weights):
+    """Write per-vertex weights with one RNA call per quantised level.
+
+    VertexGroup.add() takes a list of indices, so bucketing the weights turns
+    what used to be one add() per vertex -- over a million of them on a
+    generated asset -- into at most _WEIGHT_BUCKETS calls.
+    """
+    if name in obj.vertex_groups:
+        obj.vertex_groups.remove(obj.vertex_groups[name])
+    vg = obj.vertex_groups.new(name=name)
+
+    top = _WEIGHT_BUCKETS - 1
+    levels = np.clip(np.rint(weights * top).astype(np.int64), 0, top)
+    for bucket in range(_WEIGHT_BUCKETS):
+        indices = np.flatnonzero(levels == bucket)
+        if indices.size:
+            vg.add(indices.tolist(), bucket / top, "REPLACE")
+    return vg
+
+
+def _apply_decimate(obj, mod_name):
+    """Apply a Decimate modifier by name, always leaving the stack clean."""
+    try:
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.modifier_apply(modifier=mod_name)
+    finally:
+        if mod_name in obj.modifiers:
+            obj.modifiers.remove(obj.modifiers[mod_name])
+
+
+def _fast_prepass(obj, target_verts):
+    """Unweighted Collapse into range before the form-preserving pass runs.
+
+    Curvature weighting, the ratio solve and the deviation measurement all
+    cost time proportional to the mesh handed to them, and generated or
+    scanned assets arrive two orders of magnitude above the budget (1.03M
+    vertices for a Meshy image-to-3D result against a 30k budget). Getting
+    close first with the cheap C-level collapse leaves the expensive,
+    form-aware work an input of the size it was designed for. Nothing is
+    hidden by this: the quality gate still measures the final result against
+    the true original, so a pre-pass that lost a feature still fails.
+    """
+    before = len(obj.data.vertices)
+    ratio = max(0.0001, min(1.0, target_verts / max(1, before)))
+    mod = obj.modifiers.new(name="Simplify_Prepass", type="DECIMATE")
+    mod.decimate_type = "COLLAPSE"
+    mod.ratio = ratio
+    _apply_decimate(obj, mod.name)
+    return {
+        "vertices_before": before,
+        "vertices_after": len(obj.data.vertices),
+        "ratio": round(ratio, 5),
+    }
+
+
+def _weighted_collapse(obj, target_verts, preserve_boundaries, tolerance, use_symmetry, symmetry_axis, progress=None):
     """Reduce to target_verts with Decimate Collapse, weighted so flat
     regions give up vertices first and curved/boundary vertices survive.
 
     Collapse's `ratio` parameter is face-based, so hitting a vertex target
-    needs a solve: apply, measure, correct via secant on a working copy, up
-    to _MAX_RATIO_ITERATIONS times, then apply for real at the last ratio.
+    needs a solve: set a ratio, read what it produced, correct via secant, up
+    to _MAX_RATIO_ITERATIONS times, then apply the best ratio tried.
+
+    Each trial reads the evaluated result straight off the depsgraph. The
+    previous approach copied the whole mesh into a scratch object and applied
+    a modifier per iteration, which cost three full mesh copies and three
+    undo-pushing operator calls -- and was wrong besides: vertex *groups* live
+    on the object while only their weights live in the mesh, so the scratch
+    object never had the protection group, and every trial measured an
+    unweighted collapse whose ratio was then applied weighted.
     """
-    weights = _curvature_weights(obj)
-    if preserve_boundaries:
-        # Boundary verts are already weight 1.0 from _curvature_weights
-        # (link_faces < 2), so nothing extra needed here.
-        pass
+    if progress:
+        progress.phase("Computing curvature weights...", 0.5, force=True)
+    weights = _curvature_weights(obj.data, preserve_boundaries)
 
     vg_name = "_SimplifyProtect"
-    if vg_name in obj.vertex_groups:
-        obj.vertex_groups.remove(obj.vertex_groups[vg_name])
-    vg = obj.vertex_groups.new(name=vg_name)
-    for index, weight in enumerate(weights):
-        vg.add([index], weight, "REPLACE")
+    if progress:
+        progress.phase("Writing protection weights...", 0.58, force=True)
+    _write_vertex_group(obj, vg_name, weights)
 
     current_verts = len(obj.data.vertices)
     current_faces = len(obj.data.polygons)
 
-    ratio = planner.estimate_initial_ratio(current_verts, current_faces, target_verts)
-    samples = []
-    iterations = 0
-    final_result_verts = current_verts
-
-    for iterations in range(1, _MAX_RATIO_ITERATIONS + 1):
-        result_verts = _trial_collapse(obj, vg_name, ratio)
-        samples.append((ratio, result_verts))
-        final_result_verts = result_verts
-
-        if planner.within_tolerance(result_verts, target_verts, tolerance):
-            break
-
-        if len(samples) >= 2:
-            (r1, v1), (r2, v2) = samples[-2], samples[-1]
-            ratio = planner.secant_next_ratio(r1, v1, r2, v2, target_verts)
-        else:
-            ratio = max(0.0001, min(1.0, ratio * (target_verts / max(1, result_verts))))
-
-    # Apply for real at the last (best) ratio tried.
     mod = obj.modifiers.new(name="Simplify_Collapse", type="DECIMATE")
     mod.decimate_type = "COLLAPSE"
-    mod.ratio = samples[-1][0]
     mod.vertex_group = vg_name
     mod.vertex_group_factor = 1.0
     mod.invert_vertex_group = True  # calibrated: weight=1.0 otherwise gets MORE decimated, not less
@@ -418,49 +707,64 @@ def _weighted_collapse(obj, target_verts, preserve_boundaries, tolerance, use_sy
         mod.use_symmetry = True
         if hasattr(mod, "symmetry_axis"):
             mod.symmetry_axis = symmetry_axis
-    bpy.context.view_layer.objects.active = obj
-    bpy.ops.object.modifier_apply(modifier=mod.name)
+    mod_name = mod.name
 
-    if vg_name in obj.vertex_groups:
-        obj.vertex_groups.remove(obj.vertex_groups[vg_name])
+    try:
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        ratio = planner.estimate_initial_ratio(current_verts, current_faces, target_verts)
+        samples = []
+        iterations = 0
+
+        for iterations in range(1, _MAX_RATIO_ITERATIONS + 1):
+            if progress:
+                progress.phase(
+                    f"Solving collapse ratio ({iterations}/{_MAX_RATIO_ITERATIONS})...",
+                    0.6 + 0.05 * iterations,
+                    force=True,
+                )
+            mod.ratio = ratio
+            obj.update_tag()
+            depsgraph.update()
+            result_verts = len(obj.evaluated_get(depsgraph).data.vertices)
+            samples.append((ratio, result_verts))
+
+            if planner.within_tolerance(result_verts, target_verts, tolerance):
+                break
+
+            if len(samples) >= 2:
+                (r1, v1), (r2, v2) = samples[-2], samples[-1]
+                ratio = planner.secant_next_ratio(r1, v1, r2, v2, target_verts)
+            else:
+                ratio = max(0.0001, min(1.0, ratio * (target_verts / max(1, result_verts))))
+
+        # The *best* sample, not the last one: an unconverged solve ends on
+        # its newest guess, which can sit further from the target than an
+        # earlier iteration already got.
+        best_ratio, best_verts = min(samples, key=lambda sample: abs(sample[1] - target_verts))
+        mod.ratio = best_ratio
+
+        if progress:
+            progress.phase(f"Applying collapse (ratio {best_ratio:.4f})...", 0.85, force=True)
+        _apply_decimate(obj, mod_name)
+    finally:
+        if mod_name in obj.modifiers:
+            obj.modifiers.remove(obj.modifiers[mod_name])
+        if vg_name in obj.vertex_groups:
+            obj.vertex_groups.remove(obj.vertex_groups[vg_name])
 
     return {
         "applied": True,
         "iterations": iterations,
-        "final_ratio": round(samples[-1][0], 4),
+        "final_ratio": round(best_ratio, 4),
+        "predicted_vertices": best_verts,
         "result_vertices": len(obj.data.vertices),
+        "solver_samples": [[round(r, 5), v] for r, v in samples],
     }
 
 
-def _trial_collapse(obj, vg_name, ratio):
-    """Apply Collapse to a scratch copy of the mesh to measure the vertex
-    count a given ratio would produce, without touching the real object."""
-    trial_mesh = obj.data.copy()
-    trial_obj = bpy.data.objects.new("_SimplifyTrial", trial_mesh)
-    bpy.context.collection.objects.link(trial_obj)
-    try:
-        mod = trial_obj.modifiers.new(name="Trial", type="DECIMATE")
-        mod.decimate_type = "COLLAPSE"
-        mod.ratio = ratio
-        mod.vertex_group = vg_name if vg_name in trial_obj.vertex_groups else ""
-        if vg_name in trial_obj.vertex_groups:
-            mod.vertex_group_factor = 1.0
-            mod.invert_vertex_group = True
-        bpy.context.view_layer.objects.active = trial_obj
-        bpy.ops.object.modifier_apply(modifier=mod.name)
-        return len(trial_obj.data.vertices)
-    finally:
-        bpy.data.objects.remove(trial_obj, do_unlink=True)
-        if trial_mesh.users == 0:
-            bpy.data.meshes.remove(trial_mesh)
-
-
-def _count_boundary_edges(mesh):
-    bm = bmesh.new()
-    bm.from_mesh(mesh)
-    count = sum(1 for e in bm.edges if len(e.link_faces) == 1)
-    bm.free()
-    return count
+def _sample_points(coords, limit):
+    stride = max(1, len(coords) // limit)
+    return coords[::stride].tolist()
 
 
 def _measure_deviation(original_mesh, result_mesh):
@@ -472,47 +776,50 @@ def _measure_deviation(original_mesh, result_mesh):
     thin part removed entirely), and only shows up when measured the other
     way, result->original, i.e. how far the original's surface now is from
     its nearest point on the simplified result.
+
+    The expensive half is the BVH over the *original*: on a million-triangle
+    import, building it costs more than every other step here combined. Above
+    _DEVIATION_TWO_SIDED_MAX_FACES only the direction that needs the cheap
+    BVH (built over the already-reduced result) is measured -- that is the
+    lost-feature direction, the one the quality gate exists for -- and the
+    result says two_sided=False rather than implying it checked both.
     """
-    bm_orig = bmesh.new()
-    bm_orig.from_mesh(original_mesh)
+    diag = _bbox_diagonal(original_mesh)
+    empty = {"mean_pct": 0.0, "max_pct": 0.0, "sampled_points": 0, "two_sided": False}
+    if not len(original_mesh.vertices) or not len(result_mesh.vertices) or diag <= 1e-9:
+        return empty
+
     bm_result = bmesh.new()
     bm_result.from_mesh(result_mesh)
-
-    if not bm_orig.verts or not bm_result.verts:
-        bm_orig.free()
-        bm_result.free()
-        return {"mean_pct": 0.0, "max_pct": 0.0, "sampled_points": 0}
-
-    diag = _bbox_diagonal(bm_orig)
-    if diag <= 1e-9:
-        bm_orig.free()
-        bm_result.free()
-        return {"mean_pct": 0.0, "max_pct": 0.0, "sampled_points": 0}
-
-    bvh_orig = BVHTree.FromBMesh(bm_orig)
     bvh_result = BVHTree.FromBMesh(bm_result)
 
-    def _sample(bm, limit):
-        verts = list(bm.verts)
-        stride = max(1, len(verts) // limit)
-        return verts[::stride]
-
     distances = []
-    for v in _sample(bm_result, _DEVIATION_SAMPLE_LIMIT):
-        _, _, _, dist = bvh_orig.find_nearest(v.co)
-        if dist is not None:
-            distances.append(dist)
-    for v in _sample(bm_orig, _DEVIATION_SAMPLE_LIMIT):
-        _, _, _, dist = bvh_result.find_nearest(v.co)
+    for point in _sample_points(_vertex_coords(original_mesh), _DEVIATION_SAMPLE_LIMIT):
+        _, _, _, dist = bvh_result.find_nearest(point)
         if dist is not None:
             distances.append(dist)
 
-    bm_orig.free()
+    two_sided = len(original_mesh.polygons) <= _DEVIATION_TWO_SIDED_MAX_FACES
+    if two_sided:
+        bm_orig = bmesh.new()
+        bm_orig.from_mesh(original_mesh)
+        bvh_orig = BVHTree.FromBMesh(bm_orig)
+        for point in _sample_points(_vertex_coords(result_mesh), _DEVIATION_SAMPLE_LIMIT):
+            _, _, _, dist = bvh_orig.find_nearest(point)
+            if dist is not None:
+                distances.append(dist)
+        bm_orig.free()
+
     bm_result.free()
 
     if not distances:
-        return {"mean_pct": 0.0, "max_pct": 0.0, "sampled_points": 0}
+        return empty
 
     mean_pct = (sum(distances) / len(distances)) / diag * 100.0
     max_pct = max(distances) / diag * 100.0
-    return {"mean_pct": round(mean_pct, 4), "max_pct": round(max_pct, 4), "sampled_points": len(distances)}
+    return {
+        "mean_pct": round(mean_pct, 4),
+        "max_pct": round(max_pct, 4),
+        "sampled_points": len(distances),
+        "two_sided": two_sided,
+    }

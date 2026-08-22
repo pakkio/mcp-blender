@@ -46,5 +46,13 @@ class AssetProvider(Protocol):
     async def search(self, query: str, asset_type: str, limit: int) -> list[AssetHit]: ...
 
     async def download(
-        self, asset_id: str, dest_dir: str, image_path: str | None = None
-    ) -> DownloadedAsset: ...
+        self,
+        asset_id: str,
+        dest_dir: str,
+        image_path: str | None = None,
+        target_polycount: int | None = None,
+    ) -> DownloadedAsset:
+        """target_polycount asks the provider to remesh to a polygon budget
+        server-side (image-to-3D only). Providers that cannot must ignore it;
+        it is an optimisation, never a correctness requirement."""
+        ...

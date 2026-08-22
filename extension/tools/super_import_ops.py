@@ -406,6 +406,30 @@ def generate_ai_model_job(provider: str, prompt: str, status_cb=None) -> tuple[P
 _AI_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 _AI_IMAGE_MAX_BYTES = 20 * 1024 * 1024
 
+# Both image-to-3D providers can remesh to a polygon budget server-side, and
+# doing it there is strictly better than downloading the raw generation and
+# reducing it here: Meshy's default output runs to ~2M triangles (78 MB for a
+# single cat), which costs a long download, a long import, and then minutes of
+# local form-preserving reduction on a mesh two orders of magnitude above the
+# budget. Asking for a budget up front makes every one of those steps small.
+#
+# The request is deliberately looser than the final vertex budget -- roughly
+# four triangles per target vertex, against the ~2 a triangulated mesh
+# actually needs -- so the local simplify pass still has real headroom to
+# spend on shape rather than merely hitting the count.
+_AI_POLYCOUNT_PER_VERTEX = 4
+_AI_POLYCOUNT_MIN = 1_000
+_AI_POLYCOUNT_MAX = 300_000
+
+
+def _target_polycount(target_vertices) -> int | None:
+    """Provider-side triangle budget for a local target vertex count, or None
+    to leave the provider's own default alone (what 'keep original' wants)."""
+    if not target_vertices or int(target_vertices) <= 0:
+        return None
+    wanted = int(target_vertices) * _AI_POLYCOUNT_PER_VERTEX
+    return max(_AI_POLYCOUNT_MIN, min(_AI_POLYCOUNT_MAX, wanted))
+
 
 def _encode_image_data_uri(image_path: str | Path) -> str:
     import mimetypes
@@ -427,33 +451,48 @@ def _encode_image_data_uri(image_path: str | Path) -> str:
     return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
 
 
-def _image_job_cache_dir(provider: str, image_path_str: str) -> Path:
+def _image_job_cache_dir(provider: str, image_path_str: str, polycount=None) -> Path:
     """Content-addressed cache dir, so regenerating from the same picture is a
-    disk hit instead of a second paid generation."""
+    disk hit instead of a second paid generation.
+
+    The polygon budget is part of the key: the same picture asked for at a
+    different budget is a different model, and reusing the old one would
+    silently ignore the new budget."""
     digest = hashlib.sha256(Path(image_path_str).read_bytes()).hexdigest()[:12]
-    return Path(tempfile.gettempdir()) / "mcp_blender_assets" / provider.lower() / f"img_{digest}"
+    suffix = f"_p{polycount}" if polycount else ""
+    return Path(tempfile.gettempdir()) / "mcp_blender_assets" / provider.lower() / f"img_{digest}{suffix}"
 
 
-def generate_ai_model_image_job(provider: str, image_path: str, status_cb=None) -> tuple[Path, str]:
+def generate_ai_model_image_job(provider: str, image_path: str, status_cb=None, target_vertices=None) -> tuple[Path, str]:
     """Shared entry point for MESHY/TRIPO image-to-3D generation. Same pure
-    network-I/O contract as generate_ai_model_job above."""
+    network-I/O contract as generate_ai_model_job above.
+
+    target_vertices is the budget the caller intends to reduce to locally; it
+    is converted to a provider-side polygon budget so the generation arrives
+    near that size instead of at the provider's multi-million-triangle
+    default. Pass None to get the provider's raw output untouched.
+    """
     provider = provider.upper()
-    cache_dir = _image_job_cache_dir(provider, image_path)
+    polycount = _target_polycount(target_vertices)
+    cache_dir = _image_job_cache_dir(provider, image_path, polycount)
     if cache_dir.is_file() or (cache_dir / "model.glb").is_file():
         model_file = cache_dir if cache_dir.is_file() else cache_dir / "model.glb"
         if status_cb:
             status_cb("Cache: previously generated from this exact image, reusing...")
         return model_file, f"{provider.capitalize()} AI (image-to-3d, cached)"
     if provider == "MESHY":
-        return _generate_meshy_image_model(image_path, cache_dir, status_cb=status_cb)
+        return _generate_meshy_image_model(image_path, cache_dir, status_cb=status_cb, target_polycount=polycount)
     if provider == "TRIPO":
-        return _generate_tripo_image_model(image_path, cache_dir, status_cb=status_cb)
+        return _generate_tripo_image_model(image_path, cache_dir, status_cb=status_cb, target_polycount=polycount)
     raise ValueError(f"Unknown AI provider '{provider}' (expected MESHY or TRIPO)")
 
 
-def _generate_meshy_image_model(image_path: str, dest_dir: Path, status_cb=None) -> tuple[Path, str]:
+def _generate_meshy_image_model(image_path: str, dest_dir: Path, status_cb=None, target_polycount=None) -> tuple[Path, str]:
     """Image-to-3D via Meshy AI (/v2/image-to-3d): single-stage, always
-    textured -- unlike text mode there is no preview/refine split."""
+    textured -- unlike text mode there is no preview/refine split.
+
+    target_polycount enables Meshy's own remesher, which returns a model
+    already near the budget instead of the ~2M-triangle raw generation."""
     from ..config import load_env_vars
     load_env_vars()
     token = os.environ.get("MESHY_API_KEY")
@@ -469,8 +508,12 @@ def _generate_meshy_image_model(image_path: str, dest_dir: Path, status_cb=None)
     base_url = "https://api.meshy.ai/openapi/v1/image-to-3d"
     if status_cb:
         status_cb("Meshy: uploading image...")
+    payload = {"image_url": _encode_image_data_uri(image_path)}
+    if target_polycount:
+        payload["should_remesh"] = True
+        payload["target_polycount"] = int(target_polycount)
     try:
-        created = _post_json(base_url, headers, {"image_url": _encode_image_data_uri(image_path)})
+        created = _post_json(base_url, headers, payload)
     except Exception as exc:
         raise ValueError(f"Meshy task creation failed: {exc}") from exc
     task_id = created.get("result")
@@ -488,7 +531,8 @@ def _generate_meshy_image_model(image_path: str, dest_dir: Path, status_cb=None)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_file = dest_dir / "model.glb"
     _download_url(model_url, dest_file)
-    return dest_file, "Meshy AI (image-to-3d)"
+    budget = f", remeshed to ~{int(target_polycount):,} tris" if target_polycount else ""
+    return dest_file, f"Meshy AI (image-to-3d{budget})"
 
 
 def _poll_tripo_task(base_url: str, task_id: str, headers: dict, status_cb, label: str) -> str:
@@ -520,9 +564,11 @@ def _poll_tripo_task(base_url: str, task_id: str, headers: dict, status_cb, labe
     return model_url
 
 
-def _generate_tripo_image_model(image_path: str, dest_dir: Path, status_cb=None) -> tuple[Path, str]:
+def _generate_tripo_image_model(image_path: str, dest_dir: Path, status_cb=None, target_polycount=None) -> tuple[Path, str]:
     """Image-to-3D via Tripo3D: submit the local image as a base64 data URI,
-    poll until success, download the GLB."""
+    poll until success, download the GLB.
+
+    Tripo spells the same server-side budget `face_limit`."""
     from ..config import load_env_vars
     load_env_vars()
     token = os.environ.get("TRIPO_API_KEY")
@@ -536,12 +582,11 @@ def _generate_tripo_image_model(image_path: str, dest_dir: Path, status_cb=None)
     base_url = "https://api.tripo3d.ai/v2/openapi"
     if status_cb:
         status_cb("Tripo3D: uploading image...")
+    payload = {"type": "image_to_model", "file": _encode_image_data_uri(image_path)}
+    if target_polycount:
+        payload["face_limit"] = int(target_polycount)
     try:
-        created = _post_json(
-            f"{base_url}/task",
-            headers,
-            {"type": "image_to_model", "file": _encode_image_data_uri(image_path)},
-        )
+        created = _post_json(f"{base_url}/task", headers, payload)
     except Exception as exc:
         raise ValueError(f"Tripo3D task creation failed: {exc}") from exc
     task_id = (created.get("data") or {}).get("task_id")
@@ -555,7 +600,8 @@ def _generate_tripo_image_model(image_path: str, dest_dir: Path, status_cb=None)
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_file = dest_dir / "model.glb"
     _download_url(model_url, dest_file)
-    return dest_file, "Tripo3D (image-to-3d)"
+    budget = f", limited to ~{int(target_polycount):,} faces" if target_polycount else ""
+    return dest_file, f"Tripo3D (image-to-3d{budget})"
 
 
 def _download_sketchfab_asset(asset_id: str, dest_dir: Path) -> tuple[Path | None, str, str]:
@@ -860,7 +906,7 @@ class SuperImportTool(ToolBase):
         source_type = (params.get("source_type") or "SEARCH").upper()
         provider = (params.get("provider") or "ALL").upper()
         simplifier_tool = (params.get("simplifier_tool") or "SIMPLIFY").upper()
-        target_vertices = params.get("target_vertices", 10000)
+        target_vertices = params.get("target_vertices", 50000)
         auto_orient = bool(params.get("auto_orient", True))
         normalize_scale = bool(params.get("normalize_scale", True))
         target_size = float(params.get("target_size", 2.0))
@@ -1055,6 +1101,16 @@ class SuperImportTool(ToolBase):
                                 "object_name": obj.name,
                                 "target": budget,
                                 "target_unit": "VERTICES",
+                                # simplify_geometry is the only step here that
+                                # can run for minutes, so it drives the HUD
+                                # itself for the duration -- inside this
+                                # object's slice of the 50-85% band, so the bar
+                                # keeps moving instead of freezing on the
+                                # "Simplifying..." frame pushed just above.
+                                "_hud": {
+                                    "base": 50.0 + (idx - 1) / total_mesh_objs * 35.0,
+                                    "span": 35.0 / total_mesh_objs,
+                                },
                             })
                             if res.get("success"):
                                 simplification_log.append(
@@ -1065,9 +1121,15 @@ class SuperImportTool(ToolBase):
                                 ratio = max(0.01, min(1.0, budget / current_verts))
                                 if decimate_tool:
                                     dec_res = decimate_tool.execute({"object_name": obj.name, "ratio": ratio})
-                                    simplification_log.append(
-                                        f"Decimated '{obj.name}' (ratio {ratio:.2f}) due to gate rollback"
-                                    )
+                                    if dec_res.get("success"):
+                                        simplification_log.append(
+                                            f"Decimated '{obj.name}' (ratio {ratio:.2f}) due to gate rollback"
+                                        )
+                                    else:
+                                        simplification_log.append(
+                                            f"'{obj.name}' left unreduced: {res.get('message')} | "
+                                            f"decimate fallback also failed: {dec_res.get('message')}"
+                                        )
 
                     elif simplifier_tool == "DECIMATE":
                         decimate_tool = TOOL_REGISTRY.get("decimate_mesh")

@@ -25,6 +25,26 @@ AssetType = Literal["MODEL", "TEXTURE", "HDRI"]
 _MESH_EXTENSIONS = (".glb", ".gltf", ".fbx", ".obj", ".stl", ".usd", ".blend")
 _HDRI_EXTENSIONS = (".hdr", ".exr")
 
+# Image-to-3D providers can remesh to a polygon budget server-side. Doing it
+# there beats downloading the raw generation and reducing it here: Meshy's
+# default output is ~2M triangles (78 MB for one cat), which costs a long
+# download, a long import, and then minutes of local reduction on a mesh two
+# orders of magnitude above the budget. The request carries headroom over the
+# final budget so the local form-preserving pass still has room to spend on
+# shape rather than merely hitting the count.
+_PROVIDER_POLYCOUNT_HEADROOM = 2
+_PROVIDER_POLYCOUNT_MIN = 1_000
+_PROVIDER_POLYCOUNT_MAX = 300_000
+
+
+def _provider_polycount(tri_budget: Optional[int]) -> Optional[int]:
+    """Server-side triangle budget for a local triangle budget, or None to
+    leave the provider's own default alone."""
+    if not tri_budget or tri_budget <= 0:
+        return None
+    wanted = int(tri_budget) * _PROVIDER_POLYCOUNT_HEADROOM
+    return max(_PROVIDER_POLYCOUNT_MIN, min(_PROVIDER_POLYCOUNT_MAX, wanted))
+
 
 class SearchOnlineAssetsParams(BaseModel):
     query: str
@@ -192,7 +212,10 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
             dest_dir = cache_dir(params.provider, params.asset_id)
             try:
                 downloaded = await provider_obj.download(
-                    params.asset_id, str(dest_dir), image_path=params.image_path
+                    params.asset_id,
+                    str(dest_dir),
+                    image_path=params.image_path,
+                    target_polycount=_provider_polycount(params.target_poly_budget),
                 )
             except ProviderError as exc:
                 return {"success": False, "message": str(exc)}

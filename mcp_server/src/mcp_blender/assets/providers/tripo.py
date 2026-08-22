@@ -43,8 +43,17 @@ class TripoProvider:
         ]
 
     async def download(
-        self, asset_id: str, dest_dir: str, image_path: str | None = None
+        self,
+        asset_id: str,
+        dest_dir: str,
+        image_path: str | None = None,
+        target_polycount: int | None = None,
     ) -> DownloadedAsset:
+        # Tripo spells the server-side polygon budget `face_limit`; it applies
+        # to image_to_model only, and the budget is part of the cache key
+        # because the same picture at a different budget is a different model.
+        if target_polycount and asset_id.startswith("tripo_img_"):
+            asset_id = f"{asset_id}_p{int(target_polycount)}"
         cached = find_cached_file(self.name, asset_id)
         if cached is not None:
             return DownloadedAsset(
@@ -69,6 +78,8 @@ class TripoProvider:
                     "pass image_path again."
                 )
             body = {"type": "image_to_model", "file": image_util.to_data_uri(image_path)}
+            if target_polycount:
+                body["face_limit"] = int(target_polycount)
         else:
             prompt = asset_id.replace("tripo_", "").replace("_", " ")
             body = {"type": "text_to_model", "prompt": prompt}

@@ -91,7 +91,12 @@ class MeshyProvider:
         raise ProviderError(f"Meshy generation timed out for task '{task_id}'. Status: {last_status}")
 
     async def download(
-        self, asset_id: str, dest_dir: str, texture: bool = True, image_path: str | None = None
+        self,
+        asset_id: str,
+        dest_dir: str,
+        texture: bool = True,
+        image_path: str | None = None,
+        target_polycount: int | None = None,
     ) -> DownloadedAsset:
         """texture=True (default) runs Meshy's two-stage pipeline: a fast
         untextured 'preview' geometry pass, then a slower 'refine' pass that
@@ -110,7 +115,9 @@ class MeshyProvider:
                     f"Meshy image task '{asset_id}' needs its source image; "
                     "pass image_path again."
                 )
-            return await self._download_image(asset_id, dest_dir, image_path)
+            return await self._download_image(
+                asset_id, dest_dir, image_path, target_polycount=target_polycount
+            )
 
         cache_id = asset_id if texture else f"{asset_id}_untextured"
         cached = find_cached_file(self.name, cache_id)
@@ -183,10 +190,20 @@ class MeshyProvider:
             from_cache=False,
         )
 
-    async def _download_image(self, asset_id: str, dest_dir: str, image_path: str) -> DownloadedAsset:
+    async def _download_image(
+        self, asset_id: str, dest_dir: str, image_path: str, target_polycount: int | None = None
+    ) -> DownloadedAsset:
         """Single-stage image-to-3D: upload the local image as a base64 data
         URI, poll, download the GLB. Unlike text-to-3d there is no separate
-        refine pass -- the result is textured out of the box."""
+        refine pass -- the result is textured out of the box.
+
+        target_polycount turns on Meshy's own remesher. Left off, a single
+        generation comes back at roughly two million triangles, which then has
+        to be downloaded, imported and locally reduced; asking for the budget
+        up front makes all three cheap. The budget is part of the cache key,
+        since the same picture at a different budget is a different model."""
+        if target_polycount:
+            asset_id = f"{asset_id}_p{int(target_polycount)}"
         cached = find_cached_file(self.name, asset_id)
         if cached is not None:
             return DownloadedAsset(
@@ -204,6 +221,9 @@ class MeshyProvider:
 
         headers = {"Authorization": f"Bearer {token}"}
         payload = {"image_url": image_util.to_data_uri(image_path)}
+        if target_polycount:
+            payload["should_remesh"] = True
+            payload["target_polycount"] = int(target_polycount)
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             create_resp = await client.post(IMAGE_BASE_URL, headers=headers, json=payload)

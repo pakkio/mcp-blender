@@ -1121,7 +1121,7 @@ class MCP_OT_super_import(bpy.types.Operator):
     target_vertices: bpy.props.IntProperty(
         name="Target Vertices",
         description="Target vertex count budget per mesh object",
-        default=10000,
+        default=50000,
         min=10,
         max=10000000,
     )
@@ -1378,7 +1378,7 @@ class MCP_OT_simplify_mesh(bpy.types.Operator):
     target_vertices: bpy.props.IntProperty(
         name="Target Vertices",
         description="Target vertex count budget per mesh object",
-        default=10000,
+        default=50000,
         min=10,
         max=10000000,
     )
@@ -1649,7 +1649,7 @@ class MCP_OT_ai_generate(bpy.types.Operator):
     target_vertices: bpy.props.IntProperty(
         name="Target Vertices",
         description="Target vertex count budget for the generated model",
-        default=30000,
+        default=50000,
         min=100,
         max=100000,
         step=1000,
@@ -1787,6 +1787,11 @@ class MCP_OT_ai_generate(bpy.types.Operator):
 
         prompt = self.prompt.strip()
         provider = self.provider.upper()
+        # Hand the provider the same budget the local reduction is aiming at,
+        # so image-to-3D remeshes on their side instead of shipping a
+        # multi-million-triangle raw generation for us to reduce here. "Keep
+        # original" opts out, which is exactly what it says on the tin.
+        provider_budget = self.target_vertices if self.reduction_method != "none" else None
         self._job = {"done": False, "error": None, "path": None, "credits": None, "status": "Starting..."}
 
         def worker(job):
@@ -1795,7 +1800,9 @@ class MCP_OT_ai_generate(bpy.types.Operator):
 
             try:
                 if image_file is not None:
-                    path, credits = generate_ai_model_image_job(provider, str(image_file), status_cb=on_status)
+                    path, credits = generate_ai_model_image_job(
+                        provider, str(image_file), status_cb=on_status, target_vertices=provider_budget
+                    )
                 else:
                     path, credits = generate_ai_model_job(provider, prompt, status_cb=on_status)
                 job["path"] = path
