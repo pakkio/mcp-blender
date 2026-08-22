@@ -8,6 +8,7 @@ of sync with the MCP-facing one.
 
 import sys
 import threading
+import time
 from pathlib import Path
 import tempfile
 import urllib.parse
@@ -29,8 +30,8 @@ _AI_CLIPBOARD_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 
 
 def _dib_to_png(dib: bytes, dest_png: Path) -> Path | None:
-    """Wrap a CF_DIB payload into a BMP file and re-encode it as PNG via
-    Blender's image loader. Must run on the main thread (bpy.data access)."""
+    """Wrap a CF_DIB / CF_DIBV5 payload into a BMP file and re-encode it as
+    PNG via Blender's image loader. Must run on the main thread (bpy.data)."""
     import struct
 
     try:
@@ -63,7 +64,51 @@ def _dib_to_png(dib: bytes, dest_png: Path) -> Path | None:
         bmp_path.unlink(missing_ok=True)
 
 
-def _windows_clipboard_image(dest_dir: Path) -> Path | None:
+_KNOWN_CLIPBOARD_FORMATS = {
+    1: "TEXT", 2: "BITMAP", 8: "DIB", 13: "UNICODETEXT", 15: "HDROP", 17: "DIBV5",
+}
+
+
+def _describe_clipboard_formats(user32) -> str:
+    """Human-readable list of everything currently on the clipboard -- this is
+    what the paste button reports when no format it understands is present,
+    so 'no usable image' is never a silent guess."""
+    import ctypes
+
+    fmts = []
+    fmt = 0
+    while True:
+        fmt = user32.EnumClipboardFormats(fmt)
+        if not fmt:
+            break
+        name_buf = ctypes.create_unicode_buffer(128)
+        name = (
+            name_buf.value
+            if user32.GetClipboardFormatNameW(fmt, name_buf, 128)
+            else _KNOWN_CLIPBOARD_FORMATS.get(fmt, "?")
+        )
+        fmts.append(f"{name}({fmt})")
+    return ", ".join(fmts) if fmts else "(empty)"
+
+
+def _open_clipboard_with_retry(user32, attempts: int = 6, delay_s: float = 0.08) -> bool:
+    """The clipboard can be momentarily owned by the app that just wrote it
+    (e.g. Snipping Tool right after a capture); a short retry loop turns that
+    race from a hard fail into a sub-second wait."""
+    for i in range(attempts):
+        if user32.OpenClipboard(0):
+            return True
+        time.sleep(delay_s)
+    return False
+
+
+def _windows_clipboard_image(dest_dir: Path) -> tuple[Path | None, str]:
+    """Returns (image_path | None, diagnostics-for-the-failure-case).
+
+    Priority: Explorer-copied files (CF_HDROP), then Snipping Tool's native
+    lossless "PNG" registered format (raw PNG bytes -- no conversion needed),
+    then CF_DIB / CF_DIBV5 device-independent bitmaps wrapped into a BMP and
+    re-encoded via Blender's image loader."""
     import ctypes
 
     user32 = ctypes.windll.user32
@@ -76,10 +121,12 @@ def _windows_clipboard_image(dest_dir: Path) -> Path | None:
     user32.GetClipboardData.restype = ctypes.c_void_p
 
     found = None
-    if not user32.OpenClipboard(0):
-        return None
+    if not _open_clipboard_with_retry(user32):
+        return None, "could not open the clipboard (held by another process)"
     try:
-        CF_HDROP, CF_DIB = 15, 8
+        CF_HDROP, CF_DIB, CF_DIBV5 = 15, 8, 17
+        png_format = user32.RegisterClipboardFormatW("PNG")
+
         if user32.IsClipboardFormatAvailable(CF_HDROP):
             handle = user32.GetClipboardData(CF_HDROP)
             if handle:
@@ -96,33 +143,53 @@ def _windows_clipboard_image(dest_dir: Path) -> Path | None:
                         found = candidate
                         break
 
-        if found is None and user32.IsClipboardFormatAvailable(CF_DIB):
-            handle = user32.GetClipboardData(CF_DIB)
-            if handle:
+        if found is None:
+            for fmt, label in ((png_format, "PNG"), (CF_DIB, "CF_DIB"), (CF_DIBV5, "CF_DIBV5")):
+                if not fmt or not user32.IsClipboardFormatAvailable(fmt):
+                    continue
+                handle = user32.GetClipboardData(fmt)
+                if not handle:
+                    continue
                 ptr = kernel32.GlobalLock(handle)
-                if ptr:
-                    try:
-                        dib = ctypes.string_at(ptr, kernel32.GlobalSize(ptr))
-                    finally:
-                        kernel32.GlobalUnlock(ptr)
-                    found = _dib_to_png(dib, dest_dir / "clipboard.png")
+                if not ptr:
+                    continue
+                try:
+                    payload = ctypes.string_at(ptr, kernel32.GlobalSize(ptr))
+                finally:
+                    kernel32.GlobalUnlock(ptr)
+
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                if label == "PNG":
+                    # Raw PNG straight off the clipboard -- just write it.
+                    out = dest_dir / "clipboard.png"
+                    out.write_bytes(payload)
+                    found = out if payload[:8] == b"\x89PNG\r\n\x1a\n" else None
+                else:
+                    found = _dib_to_png(payload, dest_dir / "clipboard.png")
+                if found is not None:
+                    break
+
+        if found is None:
+            return None, f"no image format recognized (clipboard has: {_describe_clipboard_formats(user32)})"
+        return found, ""
     finally:
         user32.CloseClipboard()
-    return found
 
 
-def find_clipboard_image() -> Path | None:
+def find_clipboard_image() -> tuple["Path | None", str]:
+    """Returns (image_path_or_None, diagnostic_message_for_failure)."""
     text = bpy.context.window_manager.clipboard.strip().strip('"')
     if text:
         if text.lower().startswith("file:///"):
             text = urllib.parse.unquote(text[len("file://"):])
         candidate = Path(text)
         if candidate.suffix.lower() in _AI_CLIPBOARD_IMAGE_EXTS and candidate.is_file():
-            return candidate
+            return candidate, ""
 
     if sys.platform == "win32":
         return _windows_clipboard_image(Path(tempfile.gettempdir()) / "mcp_blender_clipboard")
-    return None
+
+    return None, "clipboard image paste is currently implemented on Windows only"
 
 
 class MCP_OT_paste_image(bpy.types.Operator):
@@ -135,18 +202,16 @@ class MCP_OT_paste_image(bpy.types.Operator):
     )
 
     def execute(self, context):
-        found = find_clipboard_image()
+        found, diagnostics = find_clipboard_image()
         if found is None:
-            self.report({"ERROR"}, "No usable image found in the clipboard")
+            self.report({"ERROR"}, f"No usable image in the clipboard: {diagnostics}")
             return {"CANCELLED"}
 
-        modal_ops = getattr(context.window, "modal_operators", ())
-        target = next((op for op in modal_ops if isinstance(op, MCP_OT_ai_generate)), None)
-        if target is None:
-            self.report({"ERROR"}, "The AI Generate dialog is not open")
-            return {"CANCELLED"}
-
-        target.image_path = str(found)
+        # Hand-off via a WindowManager custom property rather than reaching
+        # into window.modal_operators: props-dialog operator instances aren't
+        # reliably discoverable/matchable there, while the dialog's own next
+        # redraw simply picks this up wherever the dialog happens to be.
+        context.window_manager["mcp_clipboard_image"] = str(found)
         self.report({"INFO"}, f"Image pasted: {found.name}")
         return {"FINISHED"}
 
@@ -1630,6 +1695,8 @@ class MCP_OT_ai_generate(bpy.types.Operator):
 
     def draw(self, context):
         layout = self.layout
+        wm = context.window_manager
+
         box = layout.box()
         box.label(text="AI 3D Generation", icon="SHADERFX")
         box.prop(self, "provider")
@@ -1637,6 +1704,14 @@ class MCP_OT_ai_generate(bpy.types.Operator):
         if self.source_mode == "TEXT":
             box.prop(self, "prompt")
         else:
+            # Adopt a path left by the Paste operator (it can't reach this
+            # dialog instance directly). One-shot: consume the key on pickup.
+            pasted = wm.get("mcp_clipboard_image")
+            if pasted:
+                self.image_path = pasted
+                del wm["mcp_clipboard_image"]
+                type(self)._preview_img = None
+                type(self)._preview_path = None
             row = box.row(align=True)
             row.prop(self, "image_path", text="Image")
             row.operator(MCP_OT_paste_image.bl_idname, text="", icon="PASTEDOWN")
