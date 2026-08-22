@@ -24,7 +24,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 | Capability | Generic Blender MCPs | `mcp-blender` (v2.0.35) |
 | :--- | :--- | :--- |
-| **Total Tool Count** | ~5 to 15 basic tools | **138 Native Tools / 10 Unified Low-Context Domain Facades** |
+| **Total Tool Count** | ~5 to 15 basic tools | **142 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
 | **Architecture** | Legacy Blender 2.8/3.x zip addons | **Blender 4.2+ & 5.2+ Native Extension System** |
 | **Transactional Safety** | ❌ None (scene corrupts on fail) | **`execute_batch` (with automatic snapshot rollback on failure)** + **`create_scene_checkpoint`** / **`restore_scene_checkpoint`** |
@@ -59,7 +59,7 @@ By default, `mcp-blender` exposes **10 unified domain facade tools** that cut LL
 
 Four tools stay standalone even in this low-context mode rather than folding into a facade, since they're already single-purpose, high-stakes entry points worth their own full parameter schema: `search_online_assets`, `import_online_asset` (both also reachable via `blender_assets`), `evaluate_scene_visually` (also reachable via `blender_camera_lighting`), and `simplify_geometry` (also reachable via `blender_mesh(action="simplify_geometry")`) -- so aggregated mode exposes 14 tools total, not 10.
 
-*(Note: Set `MCP_BLENDER_TOOL_MODE=FULL` in your `.env` if you prefer exposing all 138 individual micro-tools separately).*
+*(Note: Set `MCP_BLENDER_TOOL_MODE=FULL` in your `.env` if you prefer exposing all 142 individual micro-tools separately).*
 
 ---
 
@@ -76,7 +76,7 @@ Four tools stay standalone even in this low-context mode rather than folding int
 
 ---
 
-## 🛠️ Complete Tool Catalog (138 Tools across 21 Domains)
+## 🛠️ Complete Tool Catalog (142 Tools across 21 Domains)
 
 ### 1. Batch Execution & Non-Modal Progress HUD
 - **`execute_batch`**: Single-roundtrip multi-tool pipeline execution with stop-on-error/optional-step control and per-step output logging.
@@ -257,7 +257,7 @@ The same force-redrawn HUD pattern from item 30 was extended to the other viewpo
 
 - **Simplify Mesh**: per-object "i/total" progress and status as each selected mesh is decimated/remeshed/form-preserving-simplified.
 - **Super Import**: staged progress through resolving the asset, downloading, importing, per-object simplification, and scale/ground normalization -- so a slow provider download or a large simplification pass no longer looks identical to a hang.
-- **Verify Tools**: per-tool "i/total" progress while health-checking the registry (up to 138 tools), with a completed-work summary on the final HUD frame.
+- **Verify Tools**: per-tool "i/total" progress while health-checking the registry (up to 140 tools), with a completed-work summary on the final HUD frame.
 
 ### Required credentials
 The unified `.env` loader (v2.0.17) reads these. Each is only needed for the provider you actually use:

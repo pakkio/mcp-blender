@@ -2,6 +2,7 @@ import base64
 from unittest.mock import AsyncMock
 
 import pytest
+from pydantic import ValidationError
 
 from conftest import FakeMCP
 from mcp_blender.errors import BridgeError
@@ -262,7 +263,16 @@ async def test_separate_logical_areas_selects_then_separates():
     bridge.send_request.side_effect = send_request
     _regen_tool, separate_tool = register_localization_tools(FakeMCP(), bridge)
 
-    result = await separate_tool(objects=["Chair_Mesh", "Table_Mesh"])
+    result = await separate_tool(
+        objects=["Chair_Mesh", "Table_Mesh"],
+        lang="en",
+        reorg_level="DEEP",
+        custom_prompt="ignore screws",
+        use_vision=True,
+        max_vision_renames=7,
+        vision_model="some/model",
+        vision_only_generic=True,
+    )
 
     assert result["success"] is True
     select_call, separate_call = bridge.send_request.await_args_list
@@ -270,9 +280,62 @@ async def test_separate_logical_areas_selects_then_separates():
         "select_objects",
         {"names": ["Chair_Mesh", "Table_Mesh"], "action": "SET", "active_object": "Chair_Mesh", "mode": "OBJECT"},
     )
-    assert separate_call.args[0] == "separate_logical_areas"
-    assert separate_call.args[1]["lang"] == "it"
+    # Assert the whole forwarded dict, not just one key: faithfully passing
+    # every param through is this wrapper's entire job, so a dropped key must
+    # fail the test rather than slip through.
+    assert separate_call.args == (
+        "separate_logical_areas",
+        {
+            "lang": "en",
+            "reorg_level": "DEEP",
+            "custom_prompt": "ignore screws",
+            "use_vision": True,
+            "max_vision_renames": 7,
+            "vision_model": "some/model",
+            "vision_only_generic": True,
+        },
+    )
     assert separate_call.kwargs["timeout"] == 600.0
+
+
+@pytest.mark.asyncio
+async def test_separate_logical_areas_defaults_are_forwarded():
+    bridge = AsyncMock()
+    bridge.send_request.return_value = {"success": True, "message": "ok"}
+    _regen_tool, separate_tool = register_localization_tools(FakeMCP(), bridge)
+
+    await separate_tool(objects=["Chair_Mesh"])
+
+    _select_call, separate_call = bridge.send_request.await_args_list
+    assert separate_call.args[1] == {
+        "lang": "it",
+        "reorg_level": "STANDARD",
+        "custom_prompt": "",
+        "use_vision": False,
+        "max_vision_renames": 9999,
+        "vision_model": None,
+        "vision_only_generic": False,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"lang": "fr"},           # unsupported lang silently fell back to Italian
+        {"reorg_level": "DEEEP"}, # unrecognized level silently fell back to STANDARD
+    ],
+)
+async def test_separate_logical_areas_rejects_out_of_range_enums(kwargs):
+    """The Blender side degrades silently on both of these rather than
+    erroring, so the schema has to reject them before anything is mutated."""
+    bridge = AsyncMock()
+    _regen_tool, separate_tool = register_localization_tools(FakeMCP(), bridge)
+
+    with pytest.raises(ValidationError):
+        await separate_tool(objects=["Chair_Mesh"], **kwargs)
+
+    bridge.send_request.assert_not_awaited()
 
 
 @pytest.mark.asyncio

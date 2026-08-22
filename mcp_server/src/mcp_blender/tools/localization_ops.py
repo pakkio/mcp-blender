@@ -13,7 +13,7 @@ selection), so this wrapper selects the given objects via select_objects
 first to keep the MCP call self-contained.
 """
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
@@ -40,8 +40,14 @@ class RegenNamesParams(BaseModel):
 
 class SeparateLogicalAreasParams(BaseModel):
     objects: list[str]
-    lang: str = "it"
-    reorg_level: str = "STANDARD"
+    # Both are constrained rather than free strings: the Blender side silently
+    # degrades on an unrecognized value instead of erroring -- an unknown lang
+    # falls back to the Italian vocabulary, and an unknown reorg_level falls
+    # back to STANDARD granularity -- so a typo would otherwise "succeed" with
+    # quietly wrong output. The viewport panel gets this for free from its
+    # EnumProperty; over MCP the schema has to enforce it.
+    lang: Literal["it", "en"] = "it"
+    reorg_level: Literal["LIGHT", "STANDARD", "DEEP"] = "STANDARD"
     custom_prompt: str = ""
     use_vision: bool = False
     max_vision_renames: int = Field(default=_DEFAULT_MAX_VISION_RENAMES, ge=0, le=9999)
@@ -211,13 +217,15 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
             "of deleted. Pass use_vision=true to also run a vision-assisted pass afterward, capping at "
             "max_vision_renames (default 9999) objects to bound cost/time; vision_only_generic=true "
             "restricts it to parts that fell back to a generic 'Part_N' name instead of re-naming every "
-            "part."
+            "part. lang is 'it' (default) or 'en'; reorg_level is LIGHT (coarser, fewer groups), "
+            "STANDARD (default), or DEEP (finer, more groups). Note this replaces the current viewport "
+            "selection with the given objects and does not restore it."
         ),
     )
     async def separate_logical_areas(
         objects: list[str],
-        lang: str = "it",
-        reorg_level: str = "STANDARD",
+        lang: Literal["it", "en"] = "it",
+        reorg_level: Literal["LIGHT", "STANDARD", "DEEP"] = "STANDARD",
         custom_prompt: str = "",
         use_vision: bool = False,
         max_vision_renames: int = _DEFAULT_MAX_VISION_RENAMES,
