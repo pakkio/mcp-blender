@@ -464,7 +464,9 @@ def _generate_meshy_image_model(image_path: str, dest_dir: Path, status_cb=None)
         )
 
     headers = {"Authorization": f"Bearer {token}"}
-    base_url = "https://api.meshy.ai/v2/image-to-3d"
+    # NB: unlike text-to-3d (which lives at /v2/text-to-3d), the image
+    # pipeline is documented under /openapi/v1 -- /v2/image-to-3d 404s.
+    base_url = "https://api.meshy.ai/openapi/v1/image-to-3d"
     if status_cb:
         status_cb("Meshy: uploading image...")
     try:

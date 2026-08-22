@@ -89,7 +89,7 @@ async def test_meshy_image_download_posts_data_uri_and_saves_glb(monkeypatch, tm
 
     result = await MeshyProvider().download("meshy_img_abc12345", str(tmp_path), image_path=str(png_file))
 
-    assert posted["url"] == "https://api.meshy.ai/v2/image-to-3d"
+    assert posted["url"] == "https://api.meshy.ai/openapi/v1/image-to-3d"
     assert posted["json"]["image_url"].startswith("data:image/png;base64,")
     assert result.filepath.endswith(".glb")
     assert result.from_cache is False

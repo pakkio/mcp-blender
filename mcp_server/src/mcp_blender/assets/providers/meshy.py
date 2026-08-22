@@ -8,7 +8,8 @@ from . import _image as image_util
 from .base import AssetHit, DownloadedAsset, ProviderError
 
 BASE_URL = "https://api.meshy.ai/v2/text-to-3d"
-IMAGE_BASE_URL = "https://api.meshy.ai/v2/image-to-3d"
+# Unlike text-to-3d (/v2), the image pipeline is documented under /openapi/v1.
+IMAGE_BASE_URL = "https://api.meshy.ai/openapi/v1/image-to-3d"
 
 
 class MeshyProvider:
