@@ -17,7 +17,9 @@ def test_mask_secret_short_values_fully_masked():
     assert mask_secret("1234567") == "***"
 
 
-async def test_get_env_info_registration_and_output():
+async def test_get_env_info_registration_and_output(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-value-12345678")
+
     mcp = FakeMCP()
     bridge = AsyncMock()
 

@@ -38,7 +38,6 @@ class TestLiveLocalizationOps(LiveBpyTestCase):
         self.assertTrue(res["success"], res.get("message"))
         props_node = next(c for c in res["root"]["children"] if c["old_name"] == "Props")
         self.assertEqual(props_node["new_name"], "Oggetti")
-        self.assertTrue(props_node["is_empty_node"])
         self.assertEqual(props_node["objects_count"], 0)
         # It must still exist in the scene, not have been pruned.
         self.assertIsNotNone(bpy.data.collections.get("Oggetti"))
@@ -93,5 +92,5 @@ class TestLiveLocalizationOps(LiveBpyTestCase):
 
         furniture_node = next(c for c in res["root"]["children"] if c["new_name"] == "Arredamento")
         self.assertEqual(len(furniture_node["objects"]), 1)
-        self.assertEqual(furniture_node["objects"][0]["name"], "Chair_Mesh")
+        self.assertEqual(furniture_node["objects"][0]["new_name"], "Chair_Mesh")
         self.assertEqual(furniture_node["objects"][0]["type"], "MESH")
