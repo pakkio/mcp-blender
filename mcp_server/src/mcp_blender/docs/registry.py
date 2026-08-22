@@ -156,6 +156,30 @@ RECIPES: dict[str, dict[str, Any]] = {
         ],
         "gotchas": "export_unity_fbx automatically fixes the -90 degree X rotation bug between Blender Z-up and Unity Y-up.",
     },
+    "mesh_logical_segmentation": {
+        "title": "Segment an Imported Mesh into Named Sub-Assemblies",
+        "description": "Split a single-blob imported mesh (a whole building, vehicle, or prop with no useful part boundaries) into an LLM-classified macro/medium/micro hierarchy of named parts, then localize any leftover generic names.",
+        "steps": [
+            {
+                "step": 1,
+                "tool": "blender_scene",
+                "action": "checkpoint_create",
+                "params": {"name": "pre_segmentation", "description": "Snapshot before destructive mesh separation"},
+            },
+            {
+                "step": 2,
+                "tool": "blender_mesh",
+                "action": "separate_logical_areas",
+                "params": {"objects": ["<imported_mesh_object_name>"], "lang": "it", "reorg_level": "STANDARD"},
+            },
+            {
+                "step": 3,
+                "tool": "regen_names",
+                "params": {"element": "<root_object_from_step_2>", "use_vision": True, "vision_only_generic": True},
+            },
+        ],
+        "gotchas": "separate_logical_areas selects the given objects internally, combining multiple into one mesh first -- pass every source object you want merged+split in a single 'objects' list rather than calling it once per object. The original source is renamed with a '.bak' suffix and hidden, not deleted, so it's recoverable without restoring the checkpoint. use_vision on either tool requires OPENROUTER_API_KEY; without it, only the LLM-text/heuristic classification pass runs.",
+    },
 }
 
 DOMAIN_DOCS: dict[str, dict[str, Any]] = {
@@ -174,6 +198,7 @@ DOMAIN_DOCS: dict[str, dict[str, Any]] = {
             "uv_unwrap": "Unwrap UV coordinates using SMART_PROJECT, CUBE, SPHERE, or LIGHTMAP. Params: object_name, method, island_margin.",
             "mesh_op": "Edit-mode operations: SUBDIVIDE, EXTRUDE, BEVEL, INSET, MERGE_BY_DISTANCE, RECALCULATE_NORMALS. Params: object_name, operation.",
             "modifier": "Add, configure, or apply modifiers (SUBSURF, BEVEL, SOLIDIFY, ARRAY, MIRROR, DISPLACE). Params: object_name, modifier_type, properties, apply_immediately.",
+            "separate_logical_areas": "Combine the given mesh object(s) into one working mesh, separate it into logical parts (by connectivity or materials), classify+rename them via LLM into medium-level sub-assemblies and micro-level parts, and organize them under parent Empties in a macro/medium/micro hierarchy. Every separated part stays visible; the original source object(s) are renamed with a '.bak' suffix and hidden instead of deleted. Params: objects (required list of mesh object names -- multiple are combined first), lang (default 'it'), reorg_level (default 'STANDARD'), custom_prompt, use_vision (bool, names parts by close-up render via a vision model -- requires OPENROUTER_API_KEY), max_vision_renames (default 9999), vision_model, vision_only_generic (restrict vision pass to parts that fell back to a generic 'Part_N' name).",
         },
     },
     "blender_material": {
