@@ -1669,26 +1669,51 @@ class MCP_OT_ai_generate(bpy.types.Operator):
     # survives across draw() redraws; swapped out whenever the path changes.
     _preview_img = None
     _preview_path = None
+    _preview_pending = None
 
     @classmethod
-    def _get_preview_image(cls, raw_path: str):
-        """Load the referenced file into bpy.data.images once per distinct path
-        and hand back its generated icon preview. Loaded lazily from draw()
-        (main thread), released again in _cleanup()."""
-        if cls._preview_path != raw_path:
-            if cls._preview_img is not None:
-                try:
-                    bpy.data.images.remove(cls._preview_img)
-                except Exception:
-                    pass
-                cls._preview_img = None
-                cls._preview_path = None
+    def _release_preview(cls):
+        if cls._preview_img is not None:
             try:
-                cls._preview_img = bpy.data.images.load(raw_path, check_existing=False)
-                cls._preview_path = raw_path
+                bpy.data.images.remove(cls._preview_img)
             except Exception:
-                return None
-        return cls._preview_img
+                pass
+        cls._preview_img = None
+        cls._preview_path = None
+        cls._preview_pending = None
+
+    @classmethod
+    def _ensure_preview(cls, raw_path: str):
+        """Return a loaded Image whose .preview icon draw() can use, or None
+        while the load is still in flight.
+
+        The load must NOT happen inside draw(): Blender forbids creating or
+        deleting IDs during UI drawing ('Writing to ID classes in this
+        context is not allowed'), which made every preview silently fail
+        before. Instead we schedule a zero-delay bpy.app.timers callback --
+        timers run outside the drawing context -- and the very next redraw
+        finds the image ready."""
+        if cls._preview_path == raw_path and cls._preview_img is not None:
+            return cls._preview_img
+        if cls._preview_pending == raw_path:
+            return None  # already loading, icon appears on a following frame
+        cls._release_preview()
+        cls._preview_pending = raw_path
+
+        def _load():
+            try:
+                img = bpy.data.images.load(raw_path, check_existing=True)
+            except Exception:
+                img = None
+            cls._preview_img = img
+            cls._preview_path = raw_path if img is not None else None
+            cls._preview_pending = None
+
+        try:
+            bpy.app.timers.register(_load, first_interval=0.05)
+        except Exception:
+            cls._preview_pending = None
+        return None
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self, width=480)
@@ -1710,19 +1735,18 @@ class MCP_OT_ai_generate(bpy.types.Operator):
             if pasted:
                 self.image_path = pasted
                 del wm["mcp_clipboard_image"]
-                type(self)._preview_img = None
-                type(self)._preview_path = None
+                type(self)._release_preview()
             row = box.row(align=True)
             row.prop(self, "image_path", text="Image")
             row.operator(MCP_OT_paste_image.bl_idname, text="", icon="PASTEDOWN")
             raw = self.image_path.strip().strip('"')
             if raw and Path(raw).is_file():
-                img = self._get_preview_image(raw)
+                img = self._ensure_preview(raw)
                 if img is not None:
                     preview_row = box.row()
                     preview_row.alignment = "CENTER"
                     preview_row.template_icon(icon_value=img.preview.icon_id, scale=6.0)
-                else:
+                elif type(self)._preview_pending is None:
                     box.label(text="Could not load a preview of this file", icon="ERROR")
             elif raw:
                 box.label(text="File not found", icon="ERROR")
@@ -1839,14 +1863,7 @@ class MCP_OT_ai_generate(bpy.types.Operator):
         if self._area:
             self._area.header_text_set(None)
             self._area = None
-        cls = type(self)
-        if cls._preview_img is not None:
-            try:
-                bpy.data.images.remove(cls._preview_img)
-            except Exception:
-                pass
-            cls._preview_img = None
-            cls._preview_path = None
+        type(self)._release_preview()
 
 
 class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
