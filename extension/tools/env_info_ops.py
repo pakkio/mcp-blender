@@ -34,6 +34,7 @@ KNOWN_SECRET_KEYS = (
 # (e.g. which vision model is selected), so they are returned verbatim.
 PUBLIC_KEYS = (
     "OPENROUTER_VISION_MODEL",
+    "TRELLIS_ENDPOINT_URL",
 )
 
 SECRET_NAME_RE = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD)", re.IGNORECASE)

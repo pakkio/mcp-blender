@@ -1,4 +1,4 @@
-# mcp-blender (v2.0.35)
+# mcp-blender (v2.1.0)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender` (v2.0.35) |
+| Capability | Generic Blender MCPs | `mcp-blender` (v2.1.0) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **142 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -259,6 +259,13 @@ The same force-redrawn HUD pattern from item 30 was extended to the other viewpo
 - **Super Import**: staged progress through resolving the asset, downloading, importing, per-object simplification, and scale/ground normalization -- so a slow provider download or a large simplification pass no longer looks identical to a hang.
 - **Verify Tools**: per-tool "i/total" progress while health-checking the registry (up to 140 tools), with a completed-work summary on the final HUD frame.
 
+### 32. Image-to-3D AI Generation (v2.1.0)
+`ai_generate` now accepts an `image_path` (local .png/.jpg/.jpeg/.webp) alongside the classic text prompt, generating a textured 3D model directly from a picture:
+
+- **Meshy** and **Tripo3D** generate from the image natively (image-to-3D endpoints); **Trellis** image mode runs through a self-hosted HF Inference Endpoint (`TRELLIS_ENDPOINT_URL` + token).
+- Asset ids are content-hash derived (`<provider>_img_<sha8>`), so regenerating from the same picture is served from the local cache instead of re-paying for generation.
+- The full downstream pipeline is reused: auto-decimation to `target_vertices`, orientation report, preview capture, collection sorting. Tripo's status polling was also fixed -- it previously checked task state exactly once and failed on any real generation.
+
 ### Required credentials
 The unified `.env` loader (v2.0.17) reads these. Each is only needed for the provider you actually use:
 
@@ -269,6 +276,7 @@ The unified `.env` loader (v2.0.17) reads these. Each is only needed for the pro
 | `OPENROUTER_API_KEY` + `OPENROUTER_VISION_MODEL` | `evaluate_scene_visually`, LLM-based renaming |
 | `SKETCHFAB_API_TOKEN` | Sketchfab asset search / import |
 | `HF_TOKEN`, `TRELLIS_API_KEY` | HuggingFace-hosted generation (Trellis) |
+| `TRELLIS_ENDPOINT_URL` | Trellis image-to-3D via HF Inference Endpoint |
 
 ---
 
@@ -277,11 +285,11 @@ The unified `.env` loader (v2.0.17) reads these. Each is only needed for the pro
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge-2.0.35.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge-2.1.0.zip
 ```
 
 3. In Blender 4.2+, open **Preferences > Get Extensions > Install from Disk...**,
-   select `dist/mcp_bridge-2.0.35.zip`, and enable **MCP Bridge**.
+   select `dist/mcp_bridge-2.1.0.zip`, and enable **MCP Bridge**.
 
 ### 2. Install the MCP Server
 

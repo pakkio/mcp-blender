@@ -22,7 +22,7 @@ class _FakeProvider:
     async def search(self, query, asset_type, limit):
         return self._hits[:limit]
 
-    async def download(self, asset_id, dest_dir):
+    async def download(self, asset_id, dest_dir, image_path=None):
         if self._download_error:
             raise self._download_error
         return self._download_result

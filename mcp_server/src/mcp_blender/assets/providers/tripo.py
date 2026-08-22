@@ -1,13 +1,15 @@
-"""Tripo3D: AI Text-to-3D Model Generation.
+"""Tripo3D: AI Text-to-3D and Image-to-3D Model Generation.
 Requires TRIPO_API_KEY environment variable.
 https://platform.tripo3d.ai/
 """
 
+import asyncio
 import os
 from pathlib import Path
 import httpx
 
 from ..cache import find_cached_file
+from . import _image as image_util
 from .base import AssetHit, DownloadedAsset, ProviderError
 
 BASE_URL = "https://api.tripo3d.ai/v2/openapi"
@@ -40,7 +42,9 @@ class TripoProvider:
             )
         ]
 
-    async def download(self, asset_id: str, dest_dir: str) -> DownloadedAsset:
+    async def download(
+        self, asset_id: str, dest_dir: str, image_path: str | None = None
+    ) -> DownloadedAsset:
         cached = find_cached_file(self.name, asset_id)
         if cached is not None:
             return DownloadedAsset(
@@ -57,14 +61,20 @@ class TripoProvider:
             raise ProviderError("Tripo3D requires TRIPO_API_KEY environment variable.")
 
         headers = {"Authorization": f"Bearer {token}"}
-        prompt = asset_id.replace("tripo_", "").replace("_", " ")
+
+        if asset_id.startswith("tripo_img_"):
+            if not image_path:
+                raise ProviderError(
+                    f"Tripo3D image task '{asset_id}' needs its source image; "
+                    "pass image_path again."
+                )
+            body = {"type": "image_to_model", "file": image_util.to_data_uri(image_path)}
+        else:
+            prompt = asset_id.replace("tripo_", "").replace("_", " ")
+            body = {"type": "text_to_model", "prompt": prompt}
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                f"{BASE_URL}/task",
-                headers=headers,
-                json={"type": "text_to_model", "prompt": prompt},
-            )
+            resp = await client.post(f"{BASE_URL}/task", headers=headers, json=body)
             if resp.status_code != 200:
                 raise ProviderError(f"Tripo3D API request failed: HTTP {resp.status_code}")
 
@@ -73,11 +83,35 @@ class TripoProvider:
             if not task_id:
                 raise ProviderError(f"No task_id returned by Tripo3D: {data}")
 
-            # Check task status
-            status_resp = await client.get(f"{BASE_URL}/task/{task_id}", headers=headers)
-            model_url = status_resp.json().get("data", {}).get("output", {}).get("model")
+            # Poll to a terminal status. The old code checked the task exactly
+            # once right after creation and failed with "url not yet ready" on
+            # any real generation -- generations take minutes.
+            model_url = None
+            last_status = "UNKNOWN"
+            for _ in range(120):
+                status_resp = await client.get(f"{BASE_URL}/task/{task_id}", headers=headers)
+                if status_resp.status_code != 200:
+                    raise ProviderError(
+                        f"Tripo3D task lookup failed: HTTP {status_resp.status_code}"
+                    )
+                task_data = status_resp.json().get("data", {})
+                last_status = task_data.get("status", last_status)
+                if last_status == "success":
+                    model_url = task_data.get("output", {}).get("model")
+                    break
+                if last_status in ("failed", "cancelled", "canceled", "banned", "expired"):
+                    raise ProviderError(
+                        f"Tripo3D generation {last_status}: "
+                        f"{task_data.get('progress_text') or 'Unknown error'}"
+                    )
+                await asyncio.sleep(3.0)
+            else:
+                raise ProviderError(
+                    f"Tripo3D generation timed out for task '{task_id}'. Status: {last_status}"
+                )
+
             if not model_url:
-                raise ProviderError(f"Tripo3D task '{task_id}' in progress. Model download url not yet ready.")
+                raise ProviderError(f"Tripo3D task '{task_id}' succeeded but returned no model URL")
 
             glb_resp = await client.get(model_url)
             if glb_resp.status_code != 200:

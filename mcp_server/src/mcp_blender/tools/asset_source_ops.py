@@ -49,6 +49,10 @@ class ImportOnlineAssetParams(BaseModel):
     up_axis: Optional[Axis] = None
     auto_orient: bool = False
     include_preview: bool = True
+    # Only meaningful for AI-generated image-to-3d ids ('<provider>_img_<sha8>'):
+    # the local source image the generation was seeded from. The hash in the id
+    # can't recover the file bytes, so it must travel with the request.
+    image_path: Optional[str] = None
 
 
 def _extract_archive(archive_path: Path) -> Path:
@@ -160,6 +164,7 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
         up_axis: Optional[Axis] = None,
         auto_orient: bool = False,
         include_preview: bool = True,
+        image_path: Optional[str] = None,
     ) -> dict:
         params = ImportOnlineAssetParams(
             asset_id=asset_id,
@@ -173,6 +178,7 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
             up_axis=up_axis,
             auto_orient=auto_orient,
             include_preview=include_preview,
+            image_path=image_path,
         )
 
         try:
@@ -185,7 +191,9 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
         ) as set_status:
             dest_dir = cache_dir(params.provider, params.asset_id)
             try:
-                downloaded = await provider_obj.download(params.asset_id, str(dest_dir))
+                downloaded = await provider_obj.download(
+                    params.asset_id, str(dest_dir), image_path=params.image_path
+                )
             except ProviderError as exc:
                 return {"success": False, "message": str(exc)}
 

@@ -14,6 +14,8 @@ from ..docs.registry import search_docs, DOMAIN_DOCS
 from ..vlm import is_configured, generate_text
 import json
 from ..errors import BridgeError, ErrorType
+from ..assets.providers._image import image_asset_id
+from ..assets.providers.base import ProviderError
 from .asset_source_ops import register_asset_source_tools
 from .bridge_status_ops import register_bridge_status_tools
 from .env_info_ops import register_env_info_tools
@@ -331,18 +333,22 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
     @mcp.tool(
         name="blender_assets",
         description=(
-            "Search free/CC0 3D assets (Poly Haven, ambientCG, Sketchfab) or generate text-to-3D models with AI "
-            "(Meshy AI, Tripo3D, Trellis) with auto-decimation & collection sorting. Import results carry an "
-            "'orientation' report; when it says the model landed on its side or upside down, retry with "
-            "params up_axis (the file's real up axis, usually 'Y') or auto_orient=true.\n\n"
-            "ai_generate params: prompt (required), provider ('meshy'|'tripo', default 'meshy'), "
-            "target_vertices (post-generation vertex budget, default 30000), reduction_method -- "
-            "'simplify' (default, form-preserving weld+dissolve+iterative collapse; higher quality but can run "
-            "for minutes on a dense/complex generated mesh), 'decimate' (plain ratio decimate, much faster, use "
-            "this for quick iteration or if 'simplify' is timing out), 'remesh' (voxel remesh, destroys UVs -- "
-            "avoid, generated models are textured), or 'none' (skip reduction entirely, fastest, keep the raw "
-            "generated mesh). Meshy AI results are always textured (a 'preview' untextured pass followed "
-            "automatically by a 'refine' texturing pass -- there is no untextured-only mode)."
+            "Search free/CC0 3D assets (Poly Haven, ambientCG, Sketchfab) or generate 3D models with AI "
+            "(Meshy AI, Tripo3D, Trellis) from a text prompt or -- via image-to-3D -- from a local image "
+            "file, with auto-decimation & collection sorting. Import results carry an 'orientation' report; "
+            "when it says the model landed on its side or upside down, retry with params up_axis (the file's "
+            "real up axis, usually 'Y') or auto_orient=true.\n\n"
+            "ai_generate params: EITHER prompt (required for text-to-3d) OR image_path (path to an existing "
+            "local .png/.jpg/.jpeg/.webp file, for image-to-3d; Meshy/Tripo generate directly from the "
+            "picture, Trellis additionally requires TRELLIS_ENDPOINT_URL + TRELLIS_API_KEY or HF_TOKEN). "
+            "Optional: provider ('meshy'|'tripo'|'trellis', default 'meshy'), target_vertices "
+            "(post-generation vertex budget, default 30000), reduction_method -- 'simplify' (default, "
+            "form-preserving weld+dissolve+iterative collapse; higher quality but can run for minutes on a "
+            "dense/complex generated mesh), 'decimate' (plain ratio decimate, much faster, use this for quick "
+            "iteration or if 'simplify' is timing out), 'remesh' (voxel remesh, destroys UVs -- avoid, "
+            "generated models are textured), or 'none' (skip reduction entirely, fastest, keep the raw "
+            "generated mesh). Generated results are textured (Meshy text mode runs an automatic refine pass); "
+            "repeat generations of the same image or prompt are served from a local cache."
         ),
     )
     async def blender_assets(
@@ -374,16 +380,33 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
                 forward_axis=p.get("forward_axis"),
                 up_axis=p.get("up_axis"),
                 auto_orient=p.get("auto_orient", False),
+                image_path=p.get("image_path"),
             )
         elif action == "ai_generate":
-            prompt = p.get("prompt", p.get("query", ""))
-            if not prompt:
-                raise BridgeError(ErrorType.VALIDATION, "'prompt' is required for ai_generate")
             provider = (p.get("provider", "meshy") or "meshy").lower()
             reduction = (p.get("reduction_method", "simplify") or "simplify").lower()
             target_verts = int(p.get("target_vertices", 30000))
 
-            asset_id = f"{provider}_prompt_{prompt.replace(' ', '_')[:30]}"
+            image_path = p.get("image_path")
+            if image_path:
+                # Image-to-3D: content-hash id gives repeat generations of the
+                # same picture a cache hit via find_cached_file(). The source
+                # file must ride along because the hash can't recover its bytes.
+                try:
+                    id_fragment = image_asset_id(image_path)
+                except ProviderError as exc:
+                    raise BridgeError(ErrorType.VALIDATION, str(exc)) from exc
+                asset_id = f"{provider}_img_{id_fragment}"
+            else:
+                prompt = p.get("prompt", p.get("query", ""))
+                if not prompt:
+                    raise BridgeError(
+                        ErrorType.VALIDATION,
+                        "ai_generate needs either 'prompt' (text-to-3d) or 'image_path' "
+                        "(image-to-3d, local .png/.jpg/.webp file)",
+                    )
+                asset_id = f"{provider}_prompt_{prompt.replace(' ', '_')[:30]}"
+
             provider_label = provider.capitalize()
             collection = p.get("collection_path", f"Generated/{provider_label}")
 
@@ -397,6 +420,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
                 forward_axis=p.get("forward_axis"),
                 up_axis=p.get("up_axis"),
                 auto_orient=p.get("auto_orient", False),
+                image_path=image_path,
             )
         elif action == "asset_browser":
             return await _dispatch_bridge(bridge, "manage_asset_browser", p)
