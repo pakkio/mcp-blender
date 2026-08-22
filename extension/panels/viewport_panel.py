@@ -6,12 +6,149 @@ TOOL_REGISTRY), so there is no second implementation of either to drift out
 of sync with the MCP-facing one.
 """
 
+import sys
 import threading
+from pathlib import Path
+import tempfile
+import urllib.parse
 
 import bpy
 
 from ..tools import TOOL_REGISTRY
 from .preferences import status_text_and_icon
+
+# Clipboard-to-image support for the AI Generate dialog. Priority order:
+# 1. clipboard *text* that names an existing image file (incl. file:// URLs),
+# 2. copied files from Explorer (CF_HDROP, Windows),
+# 3. an actual bitmap on the clipboard, e.g. a screenshot (CF_DIB, Windows).
+# The DIB case needs a conversion because providers accept PNG/JPG/WebP but
+# the OS hands over a raw device-independent bitmap; it's wrapped into a BMP
+# (header + payload verbatim) and re-encoded to PNG through Blender's own
+# image loader, which keeps the whole thing dependency-free.
+_AI_CLIPBOARD_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+
+
+def _dib_to_png(dib: bytes, dest_png: Path) -> Path | None:
+    """Wrap a CF_DIB payload into a BMP file and re-encode it as PNG via
+    Blender's image loader. Must run on the main thread (bpy.data access)."""
+    import struct
+
+    try:
+        hdr_size = struct.unpack_from("<I", dib, 0)[0]
+        bpp = struct.unpack_from("<H", dib, 14)[0]
+        compression = struct.unpack_from("<I", dib, 16)[0]
+        clr_used = struct.unpack_from("<I", dib, 32)[0]
+        palette = clr_used * 4 if clr_used else ((1 << bpp) * 4 if bpp <= 8 else 0)
+        offset = 14 + hdr_size + palette
+        # BITMAPV4/V5 headers already carry the BI_BITFIELDS channel masks;
+        # only the classic 40-byte header stores them as a trailing extension.
+        if compression == 3 and hdr_size < 108:
+            offset += 12
+        bmp_path = dest_png.with_suffix(".bmp")
+        dest_png.parent.mkdir(parents=True, exist_ok=True)
+        bmp_path.write_bytes(struct.pack("<2sIHHI", b"BM", 14 + len(dib), 0, 0, offset) + dib)
+
+        img = bpy.data.images.load(str(bmp_path), check_existing=False)
+    except Exception:
+        return None
+    try:
+        img.filepath_raw = str(dest_png)
+        img.file_format = "PNG"
+        img.save()
+        return dest_png
+    except Exception:
+        return None
+    finally:
+        bpy.data.images.remove(img)
+        bmp_path.unlink(missing_ok=True)
+
+
+def _windows_clipboard_image(dest_dir: Path) -> Path | None:
+    import ctypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalSize.restype = ctypes.c_size_t
+    user32.GetClipboardData.restype = ctypes.c_void_p
+
+    found = None
+    if not user32.OpenClipboard(0):
+        return None
+    try:
+        CF_HDROP, CF_DIB = 15, 8
+        if user32.IsClipboardFormatAvailable(CF_HDROP):
+            handle = user32.GetClipboardData(CF_HDROP)
+            if handle:
+                shell32 = ctypes.windll.shell32
+                shell32.DragQueryFileW.argtypes = [
+                    ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_uint
+                ]
+                count = shell32.DragQueryFileW(handle, 0xFFFFFFFF, None, 0)
+                for i in range(count):
+                    buf = ctypes.create_unicode_buffer(1024)
+                    shell32.DragQueryFileW(handle, i, buf, len(buf))
+                    candidate = Path(buf.value)
+                    if candidate.suffix.lower() in _AI_CLIPBOARD_IMAGE_EXTS and candidate.is_file():
+                        found = candidate
+                        break
+
+        if found is None and user32.IsClipboardFormatAvailable(CF_DIB):
+            handle = user32.GetClipboardData(CF_DIB)
+            if handle:
+                ptr = kernel32.GlobalLock(handle)
+                if ptr:
+                    try:
+                        dib = ctypes.string_at(ptr, kernel32.GlobalSize(ptr))
+                    finally:
+                        kernel32.GlobalUnlock(ptr)
+                    found = _dib_to_png(dib, dest_dir / "clipboard.png")
+    finally:
+        user32.CloseClipboard()
+    return found
+
+
+def find_clipboard_image() -> Path | None:
+    text = bpy.context.window_manager.clipboard.strip().strip('"')
+    if text:
+        if text.lower().startswith("file:///"):
+            text = urllib.parse.unquote(text[len("file://"):])
+        candidate = Path(text)
+        if candidate.suffix.lower() in _AI_CLIPBOARD_IMAGE_EXTS and candidate.is_file():
+            return candidate
+
+    if sys.platform == "win32":
+        return _windows_clipboard_image(Path(tempfile.gettempdir()) / "mcp_blender_clipboard")
+    return None
+
+
+class MCP_OT_paste_image(bpy.types.Operator):
+    bl_idname = "mcp_bridge.paste_image"
+    bl_label = "Paste from Clipboard"
+    bl_description = (
+        "Fill the Image field from the clipboard: a copied image file, an image "
+        "path copied as text, or a screenshot bitmap (screenshots are converted "
+        "to a temporary PNG)"
+    )
+
+    def execute(self, context):
+        found = find_clipboard_image()
+        if found is None:
+            self.report({"ERROR"}, "No usable image found in the clipboard")
+            return {"CANCELLED"}
+
+        modal_ops = getattr(context.window, "modal_operators", ())
+        target = next((op for op in modal_ops if isinstance(op, MCP_OT_ai_generate)), None)
+        if target is None:
+            self.report({"ERROR"}, "The AI Generate dialog is not open")
+            return {"CANCELLED"}
+
+        target.image_path = str(found)
+        self.report({"INFO"}, f"Image pasted: {found.name}")
+        return {"FINISHED"}
 
 
 class MCP_OT_create_checkpoint(bpy.types.Operator):
@@ -1396,22 +1533,39 @@ class MCP_OT_restore_checkpoint(bpy.types.Operator):
 class MCP_OT_ai_generate(bpy.types.Operator):
     bl_idname = "mcp_bridge.ai_generate"
     bl_label = "AI Generate 3D Model..."
-    bl_description = "Generate a text-to-3D model using Meshy AI or Tripo3D with auto-simplification"
+    bl_description = "Generate a 3D model from a text prompt or an image (image-to-3D) using Meshy AI or Tripo3D"
     bl_options = {"REGISTER", "UNDO"}
 
     provider: bpy.props.EnumProperty(
         name="Provider",
         description="AI 3D generation provider",
         items=[
-            ("meshy", "Meshy AI", "Meshy AI text-to-3D generation", "SHADERFX", 0),
-            ("tripo", "Tripo3D", "Tripo3D text-to-3D generation", "VIEW3D", 1),
+            ("meshy", "Meshy AI", "Meshy AI text-to-3D and image-to-3D generation", "SHADERFX", 0),
+            ("tripo", "Tripo3D", "Tripo3D text-to-3D and image-to-3D generation", "VIEW3D", 1),
         ],
         default="meshy",
+    )
+
+    source_mode: bpy.props.EnumProperty(
+        name="Input",
+        description="What to generate the model from",
+        items=[
+            ("TEXT", "Text Prompt", "Describe the model in words (text-to-3D)", "FONT_DATA", 0),
+            ("IMAGE", "Image", "Generate from a picture on disk (image-to-3D) -- use Paste to grab it from the clipboard", "IMAGE_DATA", 1),
+        ],
+        default="TEXT",
     )
 
     prompt: bpy.props.StringProperty(
         name="Prompt",
         description="Text description of the 3D model to generate (e.g. 'a medieval sword', 'a wooden chair')",
+        default="",
+    )
+
+    image_path: bpy.props.StringProperty(
+        name="Image",
+        description="Path to a .png/.jpg/.jpeg/.webp picture to generate the model from",
+        subtype="FILE_PATH",
         default="",
     )
 
@@ -1446,6 +1600,30 @@ class MCP_OT_ai_generate(bpy.types.Operator):
     _job = None
     _timer = None
     _area = None
+    # Cached preview of the currently referenced image file. Class-level so it
+    # survives across draw() redraws; swapped out whenever the path changes.
+    _preview_img = None
+    _preview_path = None
+
+    @classmethod
+    def _get_preview_image(cls, raw_path: str):
+        """Load the referenced file into bpy.data.images once per distinct path
+        and hand back its generated icon preview. Loaded lazily from draw()
+        (main thread), released again in _cleanup()."""
+        if cls._preview_path != raw_path:
+            if cls._preview_img is not None:
+                try:
+                    bpy.data.images.remove(cls._preview_img)
+                except Exception:
+                    pass
+                cls._preview_img = None
+                cls._preview_path = None
+            try:
+                cls._preview_img = bpy.data.images.load(raw_path, check_existing=False)
+                cls._preview_path = raw_path
+            except Exception:
+                return None
+        return cls._preview_img
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self, width=480)
@@ -1453,9 +1631,26 @@ class MCP_OT_ai_generate(bpy.types.Operator):
     def draw(self, context):
         layout = self.layout
         box = layout.box()
-        box.label(text="AI Text-to-3D Generation", icon="SHADERFX")
+        box.label(text="AI 3D Generation", icon="SHADERFX")
         box.prop(self, "provider")
-        box.prop(self, "prompt")
+        box.prop(self, "source_mode")
+        if self.source_mode == "TEXT":
+            box.prop(self, "prompt")
+        else:
+            row = box.row(align=True)
+            row.prop(self, "image_path", text="Image")
+            row.operator(MCP_OT_paste_image.bl_idname, text="", icon="PASTEDOWN")
+            raw = self.image_path.strip().strip('"')
+            if raw and Path(raw).is_file():
+                img = self._get_preview_image(raw)
+                if img is not None:
+                    preview_row = box.row()
+                    preview_row.alignment = "CENTER"
+                    preview_row.template_icon(icon_value=img.preview.icon_id, scale=6.0)
+                else:
+                    box.label(text="Could not load a preview of this file", icon="ERROR")
+            elif raw:
+                box.label(text="File not found", icon="ERROR")
 
         layout.separator()
         box_sim = layout.box()
@@ -1470,16 +1665,26 @@ class MCP_OT_ai_generate(bpy.types.Operator):
         box_opt.prop(self, "collection_name")
 
     def execute(self, context):
-        if not self.prompt.strip():
-            self.report({"ERROR"}, "Please enter a prompt for the 3D model")
-            return {"CANCELLED"}
-
         # Generation (task create + poll + download) is pure network/file I/O
         # with no bpy calls, so it runs on a background thread instead of
         # blocking Blender's main thread for however long Meshy/Tripo take --
         # a blocking call here previously froze the whole UI, indistinguishable
         # from a crash, for as long as the AI provider took to respond.
-        from ..tools.super_import_ops import generate_ai_model_job
+        from ..tools.super_import_ops import generate_ai_model_image_job, generate_ai_model_job
+
+        image_file = None
+        if self.source_mode == "IMAGE":
+            raw = self.image_path.strip().strip('"')
+            if not raw:
+                self.report({"ERROR"}, "Provide an image path or use Paste to grab one from the clipboard")
+                return {"CANCELLED"}
+            image_file = Path(raw)
+            if not image_file.is_file():
+                self.report({"ERROR"}, f"Image file not found: '{raw}'")
+                return {"CANCELLED"}
+        elif not self.prompt.strip():
+            self.report({"ERROR"}, "Please enter a prompt for the 3D model")
+            return {"CANCELLED"}
 
         prompt = self.prompt.strip()
         provider = self.provider.upper()
@@ -1490,7 +1695,10 @@ class MCP_OT_ai_generate(bpy.types.Operator):
                 job["status"] = text
 
             try:
-                path, credits = generate_ai_model_job(provider, prompt, status_cb=on_status)
+                if image_file is not None:
+                    path, credits = generate_ai_model_image_job(provider, str(image_file), status_cb=on_status)
+                else:
+                    path, credits = generate_ai_model_job(provider, prompt, status_cb=on_status)
                 job["path"] = path
                 job["credits"] = credits
             except Exception as exc:
@@ -1556,6 +1764,14 @@ class MCP_OT_ai_generate(bpy.types.Operator):
         if self._area:
             self._area.header_text_set(None)
             self._area = None
+        cls = type(self)
+        if cls._preview_img is not None:
+            try:
+                bpy.data.images.remove(cls._preview_img)
+            except Exception:
+                pass
+            cls._preview_img = None
+            cls._preview_path = None
 
 
 class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
@@ -1587,6 +1803,7 @@ class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
 CLASSES = (
     MCP_OT_show_env_info,
     MCP_OT_super_import,
+    MCP_OT_paste_image,
     MCP_OT_ai_generate,
     MCP_OT_normalize_model,
     MCP_OT_simplify_mesh,

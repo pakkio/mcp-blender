@@ -4,6 +4,8 @@ configurable mesh simplification (form-preserving simplify_geometry, ratio
 decimation, voxel remesh), target vertex budgeting, and automatic scale/ground normalization.
 """
 
+import base64
+import hashlib
 import json
 import math
 import os
@@ -372,29 +374,7 @@ def _generate_tripo_model(prompt: str, dest_dir: Path, status_cb=None) -> tuple[
     if not task_id:
         raise ValueError(f"No task_id returned by Tripo3D: {created}")
 
-    task_url = f"{base_url}/task/{task_id}"
-    model_url = None
-    last_status = "unknown"
-    deadline = time.monotonic() + _AI_GEN_DEADLINE_S
-    while time.monotonic() < deadline:
-        try:
-            data = _get_json(task_url, headers)
-        except Exception as exc:
-            raise ValueError(f"Tripo3D task lookup failed: {exc}") from exc
-        payload = data.get("data") or {}
-        last_status = payload.get("status", last_status)
-        progress = payload.get("progress")
-        if status_cb:
-            status_cb(f"Tripo3D: {last_status}" + (f" ({progress}%)" if progress is not None else ""))
-        if last_status == "success":
-            model_url = (payload.get("output") or {}).get("model")
-            break
-        if last_status in ("failed", "cancelled", "banned", "expired"):
-            raise ValueError(f"Tripo3D generation {last_status} for prompt '{prompt}'")
-        time.sleep(_AI_GEN_POLL_INTERVAL_S)
-
-    if not model_url:
-        raise ValueError(f"Tripo3D generation timed out for prompt '{prompt}' (last status: {last_status})")
+    model_url = _poll_tripo_task(base_url, task_id, headers, status_cb, "text-to-3d")
 
     if status_cb:
         status_cb("Tripo3D: downloading generated model...")
@@ -418,6 +398,162 @@ def generate_ai_model_job(provider: str, prompt: str, status_cb=None) -> tuple[P
     if provider == "TRIPO":
         return _generate_tripo_model(prompt, cache_dir, status_cb=status_cb)
     raise ValueError(f"Unknown AI provider '{provider}' (expected MESHY or TRIPO)")
+
+
+# Image-to-3D: same threading contract as the text path above. The source
+# image rides along as a base64 data URI -- every supported provider accepts
+# that encoding for uploads, and it means no public hosting is ever needed.
+_AI_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
+_AI_IMAGE_MAX_BYTES = 20 * 1024 * 1024
+
+
+def _encode_image_data_uri(image_path: str | Path) -> str:
+    import mimetypes
+
+    path = Path(image_path)
+    if not path.is_file():
+        raise ValueError(f"Image file not found: '{path}'")
+    if path.suffix.lower() not in _AI_IMAGE_EXTENSIONS:
+        raise ValueError(
+            f"Unsupported image type '{path.suffix}'. Supported: "
+            f"{', '.join(_AI_IMAGE_EXTENSIONS)}."
+        )
+    data = path.read_bytes()
+    if not data:
+        raise ValueError(f"Image file '{path}' is empty.")
+    if len(data) > _AI_IMAGE_MAX_BYTES:
+        raise ValueError(f"Image '{path.name}' exceeds the {_AI_IMAGE_MAX_BYTES // (1024 * 1024)} MB upload cap.")
+    mime = mimetypes.guess_type(str(path))[0] or "image/png"
+    return f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}"
+
+
+def _image_job_cache_dir(provider: str, image_path_str: str) -> Path:
+    """Content-addressed cache dir, so regenerating from the same picture is a
+    disk hit instead of a second paid generation."""
+    digest = hashlib.sha256(Path(image_path_str).read_bytes()).hexdigest()[:12]
+    return Path(tempfile.gettempdir()) / "mcp_blender_assets" / provider.lower() / f"img_{digest}"
+
+
+def generate_ai_model_image_job(provider: str, image_path: str, status_cb=None) -> tuple[Path, str]:
+    """Shared entry point for MESHY/TRIPO image-to-3D generation. Same pure
+    network-I/O contract as generate_ai_model_job above."""
+    provider = provider.upper()
+    cache_dir = _image_job_cache_dir(provider, image_path)
+    if cache_dir.is_file() or (cache_dir / "model.glb").is_file():
+        model_file = cache_dir if cache_dir.is_file() else cache_dir / "model.glb"
+        if status_cb:
+            status_cb("Cache: previously generated from this exact image, reusing...")
+        return model_file, f"{provider.capitalize()} AI (image-to-3d, cached)"
+    if provider == "MESHY":
+        return _generate_meshy_image_model(image_path, cache_dir, status_cb=status_cb)
+    if provider == "TRIPO":
+        return _generate_tripo_image_model(image_path, cache_dir, status_cb=status_cb)
+    raise ValueError(f"Unknown AI provider '{provider}' (expected MESHY or TRIPO)")
+
+
+def _generate_meshy_image_model(image_path: str, dest_dir: Path, status_cb=None) -> tuple[Path, str]:
+    """Image-to-3D via Meshy AI (/v2/image-to-3d): single-stage, always
+    textured -- unlike text mode there is no preview/refine split."""
+    from ..config import load_env_vars
+    load_env_vars()
+    token = os.environ.get("MESHY_API_KEY")
+    if not token:
+        raise ValueError(
+            "Meshy AI generation requires a free MESHY_API_KEY. "
+            "Get one at https://www.meshy.ai/api and add it to your .env file."
+        )
+
+    headers = {"Authorization": f"Bearer {token}"}
+    base_url = "https://api.meshy.ai/v2/image-to-3d"
+    if status_cb:
+        status_cb("Meshy: uploading image...")
+    try:
+        created = _post_json(base_url, headers, {"image_url": _encode_image_data_uri(image_path)})
+    except Exception as exc:
+        raise ValueError(f"Meshy task creation failed: {exc}") from exc
+    task_id = created.get("result")
+    if not task_id:
+        raise ValueError(f"No task ID returned by Meshy: {created}")
+
+    data = _poll_meshy_task(base_url, task_id, headers, status_cb, "image-to-3d")
+
+    model_url = data.get("model_urls", {}).get("glb") or data.get("model_url")
+    if not model_url:
+        raise ValueError(f"Meshy task '{task_id}' succeeded but returned no downloadable model URL")
+
+    if status_cb:
+        status_cb("Meshy: downloading generated model...")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_file = dest_dir / "model.glb"
+    _download_url(model_url, dest_file)
+    return dest_file, "Meshy AI (image-to-3d)"
+
+
+def _poll_tripo_task(base_url: str, task_id: str, headers: dict, status_cb, label: str) -> str:
+    """Poll a Tripo task to terminal status and return its model download URL.
+    Shared by text_to_model and image_to_model (same task lifecycle)."""
+    task_url = f"{base_url}/task/{task_id}"
+    model_url = None
+    last_status = "unknown"
+    deadline = time.monotonic() + _AI_GEN_DEADLINE_S
+    while time.monotonic() < deadline:
+        try:
+            data = _get_json(task_url, headers)
+        except Exception as exc:
+            raise ValueError(f"Tripo3D {label} task lookup failed: {exc}") from exc
+        payload = data.get("data") or {}
+        last_status = payload.get("status", last_status)
+        progress = payload.get("progress")
+        if status_cb:
+            status_cb(f"Tripo3D ({label}): {last_status}" + (f" ({progress}%)" if progress is not None else ""))
+        if last_status == "success":
+            model_url = (payload.get("output") or {}).get("model")
+            break
+        if last_status in ("failed", "cancelled", "canceled", "banned", "expired"):
+            raise ValueError(f"Tripo3D {label} generation {last_status}")
+        time.sleep(_AI_GEN_POLL_INTERVAL_S)
+
+    if not model_url:
+        raise ValueError(f"Tripo3D {label} generation timed out (last status: {last_status})")
+    return model_url
+
+
+def _generate_tripo_image_model(image_path: str, dest_dir: Path, status_cb=None) -> tuple[Path, str]:
+    """Image-to-3D via Tripo3D: submit the local image as a base64 data URI,
+    poll until success, download the GLB."""
+    from ..config import load_env_vars
+    load_env_vars()
+    token = os.environ.get("TRIPO_API_KEY")
+    if not token:
+        raise ValueError(
+            "Tripo3D generation requires a free TRIPO_API_KEY. "
+            "Get one at https://platform.tripo3d.ai and add it to your .env file."
+        )
+
+    headers = {"Authorization": f"Bearer {token}"}
+    base_url = "https://api.tripo3d.ai/v2/openapi"
+    if status_cb:
+        status_cb("Tripo3D: uploading image...")
+    try:
+        created = _post_json(
+            f"{base_url}/task",
+            headers,
+            {"type": "image_to_model", "file": _encode_image_data_uri(image_path)},
+        )
+    except Exception as exc:
+        raise ValueError(f"Tripo3D task creation failed: {exc}") from exc
+    task_id = (created.get("data") or {}).get("task_id")
+    if not task_id:
+        raise ValueError(f"No task_id returned by Tripo3D: {created}")
+
+    model_url = _poll_tripo_task(base_url, task_id, headers, status_cb, "image-to-3d")
+
+    if status_cb:
+        status_cb("Tripo3D: downloading generated model...")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_file = dest_dir / "model.glb"
+    _download_url(model_url, dest_file)
+    return dest_file, "Tripo3D (image-to-3d)"
 
 
 def _download_sketchfab_asset(asset_id: str, dest_dir: Path) -> tuple[Path | None, str, str]:
