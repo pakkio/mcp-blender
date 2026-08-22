@@ -25,6 +25,12 @@ exports/
 .env
 .env.local
 
+# Local MCP client config (hardcodes machine-specific paths)
+.mcp.json
+
+# Crash dumps
+*.stackdump
+
 # OS / editor
 .DS_Store
 Thumbs.db
