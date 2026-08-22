@@ -4,6 +4,13 @@ keyword vocabulary) plus an optional vision-assisted pass for the mesh
 leaves the vocabulary can't cover -- a "Chair_Mesh" or "Cylinder.003" has no
 category keyword to match, but a vision model looking at it in context can
 name it by semantic role.
+
+Also registers separate_logical_areas, a thin wrapper around the
+Blender-side tool of the same name -- unlike regen_element_names it has no
+"objects"/"element" param and instead reads bpy.context.selected_objects
+(mirroring the viewport panel button, which relies on the 3D-view
+selection), so this wrapper selects the given objects via select_objects
+first to keep the MCP call self-contained.
 """
 
 from typing import Any, Optional
@@ -25,6 +32,17 @@ _DEFAULT_MAX_VISION_RENAMES = 9999
 class RegenNamesParams(BaseModel):
     lang: str = "it"
     element: Optional[str] = None
+    use_vision: bool = False
+    max_vision_renames: int = Field(default=_DEFAULT_MAX_VISION_RENAMES, ge=0, le=9999)
+    vision_model: Optional[str] = None
+    vision_only_generic: bool = False
+
+
+class SeparateLogicalAreasParams(BaseModel):
+    objects: list[str]
+    lang: str = "it"
+    reorg_level: str = "STANDARD"
+    custom_prompt: str = ""
     use_vision: bool = False
     max_vision_renames: int = Field(default=_DEFAULT_MAX_VISION_RENAMES, ge=0, le=9999)
     vision_model: Optional[str] = None
@@ -181,4 +199,77 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
             "vision_note": vision_note,
         }
 
-    return regen_names
+    @mcp.tool(
+        name="separate_logical_areas",
+        description=(
+            "Combine the given mesh object(s) into one working mesh, separate it into logical parts "
+            "(by connectivity or materials), use an LLM to classify and rename them into medium-level "
+            "sub-assemblies and micro-level parts (e.g. Frame/Panel/Hardware for a door, not one giant "
+            "per-material blob), and organize them under parent Empties in a clean macro (whole "
+            "assembly) / medium (sub-assembly) / micro (part) hierarchy. Every separated part is left "
+            "visible; the original source object(s) are renamed with a '.bak' suffix and hidden instead "
+            "of deleted. Pass use_vision=true to also run a vision-assisted pass afterward, capping at "
+            "max_vision_renames (default 9999) objects to bound cost/time; vision_only_generic=true "
+            "restricts it to parts that fell back to a generic 'Part_N' name instead of re-naming every "
+            "part."
+        ),
+    )
+    async def separate_logical_areas(
+        objects: list[str],
+        lang: str = "it",
+        reorg_level: str = "STANDARD",
+        custom_prompt: str = "",
+        use_vision: bool = False,
+        max_vision_renames: int = _DEFAULT_MAX_VISION_RENAMES,
+        vision_model: Optional[str] = None,
+        vision_only_generic: bool = False,
+    ) -> dict:
+        params = SeparateLogicalAreasParams(
+            objects=objects,
+            lang=lang,
+            reorg_level=reorg_level,
+            custom_prompt=custom_prompt,
+            use_vision=use_vision,
+            max_vision_renames=max_vision_renames,
+            vision_model=vision_model,
+            vision_only_generic=vision_only_generic,
+        )
+        if not params.objects:
+            raise BridgeError(
+                ErrorType.TOOL_EXECUTION,
+                "separate_logical_areas requires at least one mesh object name in 'objects'.",
+            )
+
+        # The Blender-side tool reads bpy.context.selected_objects rather than
+        # taking an explicit target list (it mirrors the viewport panel button,
+        # which relies on the user's 3D-view selection) -- establish the same
+        # precondition here so this is a self-contained MCP call.
+        select_result = await bridge.send_request(
+            "select_objects",
+            {"names": params.objects, "action": "SET", "active_object": params.objects[0], "mode": "OBJECT"},
+        )
+        if not select_result.get("success"):
+            raise BridgeError(
+                ErrorType.TOOL_EXECUTION, select_result.get("message", "select_objects failed")
+            )
+
+        result = await bridge.send_request(
+            "separate_logical_areas",
+            {
+                "lang": params.lang,
+                "reorg_level": params.reorg_level,
+                "custom_prompt": params.custom_prompt,
+                "use_vision": params.use_vision,
+                "max_vision_renames": params.max_vision_renames,
+                "vision_model": params.vision_model,
+                "vision_only_generic": params.vision_only_generic,
+            },
+            timeout=HEAVY_REQUEST_TIMEOUT_S,
+        )
+        if not result.get("success"):
+            raise BridgeError(
+                ErrorType.TOOL_EXECUTION, result.get("message", "separate_logical_areas failed")
+            )
+        return result
+
+    return regen_names, separate_logical_areas

@@ -232,7 +232,8 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
         description=(
             "Geometry manipulation: create primitives, delete, duplicate, transform, boolean CSG, decimate "
             "(<10k poly budget), remesh, simplify to a vertex budget while preserving form, UV unwrap, edit "
-            "mesh, and modifiers."
+            "mesh, modifiers, and separate_logical_areas (combine+split mesh(es) into LLM-classified "
+            "macro/medium/micro sub-assemblies)."
         ),
     )
     async def blender_mesh(
@@ -250,10 +251,22 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "mesh_op",
             "modifier",
             "origin_cursor",
+            "separate_logical_areas",
         ],
         params: Optional[dict[str, Any]] = None,
     ) -> dict:
         p = params or {}
+        if action == "separate_logical_areas":
+            return await separate_logical_areas_tool(
+                objects=p.get("objects", []),
+                lang=p.get("lang", "it"),
+                reorg_level=p.get("reorg_level", "STANDARD"),
+                custom_prompt=p.get("custom_prompt", ""),
+                use_vision=p.get("use_vision", False),
+                max_vision_renames=p.get("max_vision_renames", 9999),
+                vision_model=p.get("vision_model"),
+                vision_only_generic=p.get("vision_only_generic", False),
+            )
         method_map = {
             "create": "create_object",
             "delete": "delete_object",
@@ -449,10 +462,11 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
     # rather than being buried a level down in a params dict.
     register_bridge_status_tools(mcp, bridge)
 
-    # Kept standalone (also reachable via blender_scene(action="regen")): the
+    # Kept standalone (also reachable via blender_scene(action="regen") and,
+    # for separation, blender_mesh(action="separate_logical_areas")): the
     # literal `regen("it")`-style call this was asked for is worth a direct
     # top-level tool, not just a nested action.
-    regen_tool = register_localization_tools(mcp, bridge)
+    regen_tool, separate_logical_areas_tool = register_localization_tools(mcp, bridge)
 
     # 6. Rigging, Hair Curves & Animation
     @mcp.tool(

@@ -115,6 +115,33 @@ async def test_blender_scene_regen_action_routes_to_localization_orchestration()
 
 
 @pytest.mark.asyncio
+async def test_blender_mesh_separate_logical_areas_action_routes_to_localization_orchestration():
+    mcp = FakeMCP()
+    bridge = AsyncMock()
+
+    async def send_request(method, params, timeout=None):
+        if method == "select_objects":
+            return {"success": True}
+        if method == "separate_logical_areas":
+            return {"success": True, "message": "Successfully separated into 3 parts."}
+        return {"success": True}
+
+    bridge.send_request.side_effect = send_request
+    register_domain_facades(mcp, bridge)
+
+    mesh_tool = mcp.tools["blender_mesh"]
+    result = await mesh_tool(action="separate_logical_areas", params={"objects": ["Chair_Mesh"]})
+
+    assert result["success"] is True
+    select_call, separate_call = bridge.send_request.await_args_list
+    assert select_call.args[0] == "select_objects"
+    assert separate_call.args[0] == "separate_logical_areas"
+
+    # And reachable as its own top-level tool too, matching regen_names' pattern.
+    assert "separate_logical_areas" in mcp.tools
+
+
+@pytest.mark.asyncio
 async def test_tool_mode_switching():
     # Test AGGREGATED mode (default)
     with patch.dict("os.environ", {"MCP_BLENDER_TOOL_MODE": "AGGREGATED"}):

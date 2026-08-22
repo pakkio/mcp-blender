@@ -68,7 +68,7 @@ def _bridge_with_structural_result(extra_responses=None):
 async def test_regen_names_structural_only_by_default(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     bridge = _bridge_with_structural_result()
-    handler = register_localization_tools(FakeMCP(), bridge)
+    handler, _separate_tool = register_localization_tools(FakeMCP(), bridge)
 
     result = await handler()
 
@@ -85,7 +85,7 @@ async def test_regen_names_structural_only_by_default(monkeypatch):
 async def test_regen_names_structural_failure_raises(monkeypatch):
     bridge = AsyncMock()
     bridge.send_request.return_value = {"success": False, "message": "no such element"}
-    handler = register_localization_tools(FakeMCP(), bridge)
+    handler, _separate_tool = register_localization_tools(FakeMCP(), bridge)
 
     with pytest.raises(BridgeError, match="no such element"):
         await handler(element="Nonexistent")
@@ -95,7 +95,7 @@ async def test_regen_names_structural_failure_raises(monkeypatch):
 async def test_regen_names_vision_skipped_without_api_key(monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     bridge = _bridge_with_structural_result()
-    handler = register_localization_tools(FakeMCP(), bridge)
+    handler, _separate_tool = register_localization_tools(FakeMCP(), bridge)
 
     result = await handler(use_vision=True)
 
@@ -118,7 +118,7 @@ async def test_regen_names_vision_pass_renames_mesh_leaf_with_semantic_prompt(mo
             "set_object_properties": lambda p: {"success": True, "name": p["new_name"]},
         }
     )
-    handler = register_localization_tools(FakeMCP(), bridge)
+    handler, _separate_tool = register_localization_tools(FakeMCP(), bridge)
 
     seen_questions = []
 
@@ -152,7 +152,7 @@ async def test_regen_names_vision_pass_skips_object_on_capture_failure(monkeypat
     bridge = _bridge_with_structural_result(
         extra_responses={"inspect_focus_shot": {"success": False, "message": "no camera"}}
     )
-    handler = register_localization_tools(FakeMCP(), bridge)
+    handler, _separate_tool = register_localization_tools(FakeMCP(), bridge)
 
     async def fake_critique(question, png_bytes, model=None):
         raise AssertionError("must not be called when capture fails")
@@ -197,7 +197,7 @@ async def test_regen_names_respects_max_vision_renames_cap(monkeypatch):
         return {"success": True}
 
     bridge.send_request.side_effect = send_request
-    handler = register_localization_tools(FakeMCP(), bridge)
+    handler, _separate_tool = register_localization_tools(FakeMCP(), bridge)
 
     async def fake_critique(question, png_bytes, model=None):
         return {"critique": "Parte", "model": "m", "prompt_tokens": 1, "completion_tokens": 1}
@@ -236,7 +236,7 @@ async def test_regen_names_vision_only_generic_skips_already_renamed_leaves(monk
         return {"success": True}
 
     bridge.send_request.side_effect = send_request
-    handler = register_localization_tools(FakeMCP(), bridge)
+    handler, _separate_tool = register_localization_tools(FakeMCP(), bridge)
 
     async def fake_critique(question, png_bytes, model=None):
         return {"critique": "Sedile", "model": "m", "prompt_tokens": 1, "completion_tokens": 1}
@@ -246,3 +246,67 @@ async def test_regen_names_vision_only_generic_skips_already_renamed_leaves(monk
     result = await handler(use_vision=True, vision_only_generic=True)
 
     assert result["vision_renames"] == [{"old_name": "Chair_Mesh", "new_name": "Sedile"}]
+
+
+@pytest.mark.asyncio
+async def test_separate_logical_areas_selects_then_separates():
+    bridge = AsyncMock()
+
+    async def send_request(method, params, timeout=None):
+        if method == "select_objects":
+            return {"success": True}
+        if method == "separate_logical_areas":
+            return {"success": True, "message": "Successfully separated into 3 parts across 2 groups."}
+        return {"success": True}
+
+    bridge.send_request.side_effect = send_request
+    _regen_tool, separate_tool = register_localization_tools(FakeMCP(), bridge)
+
+    result = await separate_tool(objects=["Chair_Mesh", "Table_Mesh"])
+
+    assert result["success"] is True
+    select_call, separate_call = bridge.send_request.await_args_list
+    assert select_call.args == (
+        "select_objects",
+        {"names": ["Chair_Mesh", "Table_Mesh"], "action": "SET", "active_object": "Chair_Mesh", "mode": "OBJECT"},
+    )
+    assert separate_call.args[0] == "separate_logical_areas"
+    assert separate_call.args[1]["lang"] == "it"
+    assert separate_call.kwargs["timeout"] == 600.0
+
+
+@pytest.mark.asyncio
+async def test_separate_logical_areas_requires_at_least_one_object():
+    bridge = AsyncMock()
+    _regen_tool, separate_tool = register_localization_tools(FakeMCP(), bridge)
+
+    with pytest.raises(BridgeError, match="at least one mesh object"):
+        await separate_tool(objects=[])
+
+    bridge.send_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_separate_logical_areas_select_failure_raises():
+    bridge = AsyncMock()
+    bridge.send_request.side_effect = [{"success": False, "message": "no such object"}]
+    _regen_tool, separate_tool = register_localization_tools(FakeMCP(), bridge)
+
+    with pytest.raises(BridgeError, match="no such object"):
+        await separate_tool(objects=["Missing"])
+
+
+@pytest.mark.asyncio
+async def test_separate_logical_areas_bridge_failure_raises():
+    bridge = AsyncMock()
+
+    async def send_request(method, params, timeout=None):
+        if method == "select_objects":
+            return {"success": True}
+        return {"success": False, "message": "Please select at least one MESH object"}
+
+    bridge.send_request.side_effect = send_request
+    _regen_tool, separate_tool = register_localization_tools(FakeMCP(), bridge)
+
+    with pytest.raises(BridgeError, match="Please select at least one MESH object"):
+        await separate_tool(objects=["NotAMesh"])
