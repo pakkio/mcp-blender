@@ -92,5 +92,6 @@ class TestLiveLocalizationOps(LiveBpyTestCase):
 
         furniture_node = next(c for c in res["root"]["children"] if c["new_name"] == "Arredamento")
         self.assertEqual(len(furniture_node["objects"]), 1)
-        self.assertEqual(furniture_node["objects"][0]["new_name"], "Chair_Mesh")
+        self.assertEqual(furniture_node["objects"][0]["old_name"], "Chair_Mesh")
+        self.assertEqual(furniture_node["objects"][0]["new_name"], "Sedia_Mesh")
         self.assertEqual(furniture_node["objects"][0]["type"], "MESH")
