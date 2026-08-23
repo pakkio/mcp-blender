@@ -146,7 +146,13 @@ class SketchfabProvider:
             )
         return hits
 
-    async def download(self, asset_id: str, dest_dir: str) -> DownloadedAsset:
+    async def download(
+        self,
+        asset_id: str,
+        dest_dir: str,
+        image_path: str | None = None,
+        target_polycount: int | None = None,
+    ) -> DownloadedAsset:
         token = self._token()
         if not token:
             raise ProviderError(

@@ -63,7 +63,13 @@ class PolyHavenProvider:
 
         return hits
 
-    async def download(self, asset_id: str, dest_dir: str) -> DownloadedAsset:
+    async def download(
+        self,
+        asset_id: str,
+        dest_dir: str,
+        image_path: str | None = None,
+        target_polycount: int | None = None,
+    ) -> DownloadedAsset:
         cached = find_cached_file(self.name, asset_id)
         if cached is not None:
             return DownloadedAsset(
