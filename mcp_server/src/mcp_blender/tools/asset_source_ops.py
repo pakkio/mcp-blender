@@ -37,12 +37,21 @@ _PROVIDER_POLYCOUNT_MIN = 1_000
 _PROVIDER_POLYCOUNT_MAX = 300_000
 
 
-def _provider_polycount(tri_budget: Optional[int]) -> Optional[int]:
-    """Server-side triangle budget for a local triangle budget, or None to
-    leave the provider's own default alone."""
-    if not tri_budget or tri_budget <= 0:
+def _provider_polycount(vertex_budget: Optional[int]) -> Optional[int]:
+    """Server-side *triangle* budget (what Meshy/Tripo's own remesh params
+    want) for a local *vertex* budget (what target_poly_budget means -- see
+    the note on ImportOnlineAssetParams.target_poly_budget), or None to leave
+    the provider's own default alone.
+
+    The x2 headroom already does double duty: it is both slack for the local
+    form-preserving pass to spend on shape rather than merely hitting the
+    count, AND a reasonable vertices->triangles scale factor (triangles run
+    roughly 2x vertices on a closed triangulated mesh), so no separate
+    conversion constant is needed.
+    """
+    if not vertex_budget or vertex_budget <= 0:
         return None
-    wanted = int(tri_budget) * _PROVIDER_POLYCOUNT_HEADROOM
+    wanted = int(vertex_budget) * _PROVIDER_POLYCOUNT_HEADROOM
     return max(_PROVIDER_POLYCOUNT_MIN, min(_PROVIDER_POLYCOUNT_MAX, wanted))
 
 
@@ -60,6 +69,11 @@ ReductionMethod = Literal["simplify", "decimate", "remesh"]
 class ImportOnlineAssetParams(BaseModel):
     asset_id: str
     provider: str
+    # A *vertex* budget despite the name (kept for API stability -- this is a
+    # public tool parameter). simplify_geometry, the reducer this eventually
+    # calls, is natively vertex-budgeted, and every other caller of this value
+    # (the panel, super_import, blender_assets' target_vertices) already means
+    # vertices, so this is treated as vertices throughout below.
     target_poly_budget: Optional[int] = None
     reduction_method: Optional[ReductionMethod] = None
     collection_path: Optional[str] = None
@@ -160,8 +174,9 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
         name="import_online_asset",
         description=(
             "Download a searched asset (by id + provider from search_online_assets) and import it into the scene via "
-            "the existing import_file pipeline. Pass target_poly_budget to auto-reduce over budget (10k background "
-            "props, 30k hero props, 100k ceiling); reduction_method picks how: 'simplify' (default when omitted, "
+            "the existing import_file pipeline. Pass target_poly_budget (a VERTEX count despite the name) to "
+            "auto-reduce over budget (10k background props, 50k hero props/default AI-generation budget, 100k "
+            "ceiling); reduction_method picks how: 'simplify' (default when omitted, "
             "form-preserving, falls back to a plain ratio decimate if its quality gate rejects the result), "
             "'decimate' (skip straight to the ratio decimate), or 'remesh' (voxel remesh -- destroys UVs/textures, "
             "only use on untextured/procedural-material assets). Pass collection_path to file it under a nested "
@@ -310,21 +325,31 @@ def register_asset_source_tools(mcp: FastMCP, bridge: BlenderBridge):
                 info.get("mesh_data", {}).get("polygons_count", 0)
                 for info in infos.values()
             )
+            vert_count_before = sum(
+                info.get("mesh_data", {}).get("vertices_count", 0)
+                for info in infos.values()
+            )
 
             decimation_applied = None
-            if params.target_poly_budget and tri_count_before > params.target_poly_budget > 0:
+            if params.target_poly_budget and vert_count_before > params.target_poly_budget > 0:
                 decimation_applied = {"tri_count_before": tri_count_before, "objects": {}}
                 for name, info in infos.items():
                     if info.get("type") != "MESH":
                         continue
                     mesh_verts = info.get("mesh_data", {}).get("vertices_count", 0)
-                    mesh_tris = info.get("mesh_data", {}).get("polygons_count", 0)
-                    # target_poly_budget is a triangle budget; simplify_geometry works
-                    # in vertices, so scale it per-object by that object's own tri/vert ratio.
+                    # target_poly_budget is a vertex budget; split it across objects
+                    # proportional to each one's share of the total vertex count, so
+                    # a 10-vert prop doesn't get the same target as the hero mesh
+                    # sitting next to it.
                     vert_target = (
-                        round(params.target_poly_budget * mesh_verts / mesh_tris) if mesh_tris > 0 else None
+                        round(params.target_poly_budget * mesh_verts / vert_count_before)
+                        if vert_count_before > 0 else None
                     )
-                    ratio = max(0.02, min(1.0, params.target_poly_budget / tri_count_before))
+                    # Decimate's ratio is face-based, but applying vert_target/mesh_verts
+                    # as that ratio is exact regardless of this object's own tri/vert
+                    # ratio: target_tris = vert_target * (mesh_tris/mesh_verts), so
+                    # target_tris/mesh_tris simplifies to vert_target/mesh_verts.
+                    ratio = max(0.02, min(1.0, vert_target / mesh_verts)) if vert_target and mesh_verts > 0 else 1.0
 
                     simplify_result = None
                     # method=None (unspecified) keeps the original auto behaviour: try

@@ -47,6 +47,18 @@ from ..tools import TOOL_REGISTRY
 _queue: "queue.Queue[QueuedRequest]" = queue.Queue()
 _generation = 0
 
+# server.py's per-request timeout tops out at HEAVY_REQUEST_TIMEOUT_S (600s):
+# a client that hasn't heard back by then has already given up and (if it
+# retries at all) enqueued a fresh request, whose future asyncio.wait_for
+# then cancels on ITS OWN timeout -- and _handle_item already skips a
+# cancelled future. This constant guards the gap in that story: a future
+# only gets cancelled once it stops being awaited, and while the main thread
+# is itself stuck inside an earlier blocking tool.execute() call for many
+# minutes, several such abandoned retries can be sitting in the queue
+# uncancelled at once. Comfortably above every registered timeout tier so it
+# never fires on a request anyone could still plausibly be waiting on.
+_STALE_QUEUE_AGE_S = 900.0
+
 _ACTIVE_INTERVAL_S = 0.05
 _MAX_IDLE_INTERVAL_S = 0.3
 _idle_streak = 0
@@ -78,6 +90,7 @@ class QueuedRequest:
     params: dict
     future: Future
     generation: int
+    enqueued_at: float
 
 
 class StaleGenerationError(Exception):
@@ -96,7 +109,7 @@ def get_generation() -> int:
 
 def enqueue(request_id, method: str, params: dict) -> Future:
     future: Future = Future()
-    _queue.put(QueuedRequest(request_id, method, params, future, _generation))
+    _queue.put(QueuedRequest(request_id, method, params, future, _generation, time.time()))
     return future
 
 
@@ -136,6 +149,18 @@ def drain_queue() -> float:
 
 def _handle_item(item: QueuedRequest) -> None:
     if item.future.cancelled() or item.future.done():
+        return
+    age = time.time() - item.enqueued_at
+    if age > _STALE_QUEUE_AGE_S:
+        if not item.future.done():
+            item.future.set_result(
+                protocol.error_envelope(
+                    item.request_id,
+                    protocol.INTERNAL_ERROR,
+                    f"Discarded: request sat unexecuted for {age:.0f}s behind a busy main thread "
+                    "(the client almost certainly already gave up and, if it needed this, retried)",
+                )
+            )
         return
     if item.generation != _generation:
         if not item.future.done():

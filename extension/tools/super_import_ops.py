@@ -231,6 +231,38 @@ def _find_mesh_file(extract_dir: Path) -> Path | None:
     return None
 
 
+def _has_baked_texture(objs) -> bool:
+    """Whether any imported mesh carries a material with an image texture --
+    the signal that Solid shading (grey, untextured-looking) would be lying
+    about what actually got imported."""
+    for obj in objs:
+        if obj.type != "MESH":
+            continue
+        for mat in obj.data.materials:
+            if not mat or not mat.use_nodes or not mat.node_tree:
+                continue
+            for node in mat.node_tree.nodes:
+                if node.type == "TEX_IMAGE" and node.image is not None:
+                    return True
+    return False
+
+
+def _switch_viewport_shading(shading_type: str) -> int:
+    """Set every open 3D viewport to the given shading type. Returns how many
+    were switched, so a headless/no-window caller can tell nothing happened
+    rather than silently no-op'ing."""
+    switched = 0
+    for window in bpy.context.window_manager.windows:
+        for area in window.screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            for space in area.spaces:
+                if space.type == "VIEW_3D":
+                    space.shading.type = shading_type
+                    switched += 1
+    return switched
+
+
 def _download_url(url: str, dest_path: Path) -> None:
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     with urllib.request.urlopen(req, timeout=60) as resp, open(dest_path, "wb") as f:
@@ -1074,6 +1106,17 @@ class SuperImportTool(ToolBase):
             ]
             verts_before = sum(len(obj.data.vertices) for obj in mesh_objs)
 
+            # A model that arrives with a baked baseColor texture still renders
+            # flat grey in Solid shading -- the default 3D viewport mode -- which
+            # is what made a correctly-generated, fully textured AI asset look
+            # like a broken one. Report it either way so a caller isn't left
+            # guessing, and switch to Material Preview when it would otherwise
+            # be invisible.
+            textured = _has_baked_texture(mesh_objs)
+            switched_viewport = False
+            if textured and not bpy.app.background:
+                switched_viewport = _switch_viewport_shading("MATERIAL") > 0
+
             simplification_log = []
 
             # Step 1: Mesh Simplification
@@ -1188,6 +1231,9 @@ class SuperImportTool(ToolBase):
                 f"Super imported {len(imported_names)} object(s) from '{resolved_path.name}' "
                 f"(Vertices: {verts_before:,} -> {verts_after:,})"
             )
+            summary_msg += " | textured: yes" if textured else " | textured: no"
+            if switched_viewport:
+                summary_msg += " (viewport switched to Material Preview)"
             if norm_log:
                 summary_msg += f" | {norm_log}"
             if simplification_log:
@@ -1216,6 +1262,8 @@ class SuperImportTool(ToolBase):
                 "target_size": target_size,
                 "credits": credits_info,
                 "filepath": str(resolved_path),
+                "textured": textured,
+                "viewport_switched_to_material_preview": switched_viewport,
             }
 
         except Exception as exc:

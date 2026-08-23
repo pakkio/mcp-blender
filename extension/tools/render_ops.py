@@ -7,6 +7,17 @@ import bpy
 from .base import ToolBase
 
 
+# render_scene has no cancellation (bpy.ops.render.render blocks the main
+# thread until it finishes, the same shape of hang simplify_geometry used to
+# cause), so the only defense against an accidental multi-hour render is
+# refusing to start one whose parameters -- taken from whatever the scene
+# happens to carry when neither is passed explicitly -- are wildly past what
+# a reasonable interactive/inspection render needs. Reasoned defaults, not
+# measured; override with force=true for a deliberate final-quality render.
+_MAX_RESOLUTION_PX = 8192
+_MAX_SAMPLES = 4096
+
+
 def _set_render_engine(scene, engine: str):
     engine_upper = engine.upper()
     if engine_upper in ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT", "EEVEE"):
@@ -57,6 +68,32 @@ class RenderSceneTool(ToolBase):
 
         if params.get("transparent_background") is not None:
             scene.render.film_transparent = bool(params["transparent_background"])
+
+        force = bool(params.get("force", False))
+        if not force:
+            eff_res_x = scene.render.resolution_x * scene.render.resolution_percentage // 100
+            eff_res_y = scene.render.resolution_y * scene.render.resolution_percentage // 100
+            if eff_res_x > _MAX_RESOLUTION_PX or eff_res_y > _MAX_RESOLUTION_PX:
+                return {
+                    "success": False,
+                    "message": (
+                        f"Refusing to render at {eff_res_x}x{eff_res_y}px (cap {_MAX_RESOLUTION_PX}px/axis): "
+                        "lower resolution_x/resolution_y/resolution_percentage, or pass force=true to render anyway."
+                    ),
+                }
+            samples = None
+            if scene.render.engine == "CYCLES":
+                samples = scene.cycles.samples
+            elif hasattr(scene, "eevee") and hasattr(scene.eevee, "taa_render_samples"):
+                samples = scene.eevee.taa_render_samples
+            if samples is not None and samples > _MAX_SAMPLES:
+                return {
+                    "success": False,
+                    "message": (
+                        f"Refusing to render at {samples} samples (cap {_MAX_SAMPLES}): pass a lower "
+                        "'samples' param, or force=true to render anyway."
+                    ),
+                }
 
         scene.render.filepath = output_path
         scene.render.image_settings.file_format = "PNG"

@@ -108,6 +108,10 @@ class MeshyProvider:
         pipeline instead, which is single-stage and always textured -- there
         is no preview/refine split on that endpoint. image_path must be the
         local file the id was derived from (the hash alone can't recover it).
+
+        target_polycount also reaches the preview stage here (the 'refine'
+        texturing pass keeps whatever topology preview produced): the same
+        should_remesh/target_polycount fields as image-to-3d, range 100-300k.
         """
         if asset_id.startswith("meshy_img_"):
             if not image_path:
@@ -120,6 +124,8 @@ class MeshyProvider:
             )
 
         cache_id = asset_id if texture else f"{asset_id}_untextured"
+        if target_polycount:
+            cache_id = f"{cache_id}_p{int(target_polycount)}"
         cached = find_cached_file(self.name, cache_id)
         if cached is not None:
             return DownloadedAsset(
@@ -141,10 +147,14 @@ class MeshyProvider:
             task_id = asset_id
             if asset_id.startswith("meshy_prompt_"):
                 prompt = asset_id[len("meshy_prompt_"):].replace("_", " ")
+                preview_payload = {"mode": "preview", "prompt": prompt, "art_style": "realistic"}
+                if target_polycount:
+                    preview_payload["should_remesh"] = True
+                    preview_payload["target_polycount"] = int(target_polycount)
                 create_resp = await client.post(
                     BASE_URL,
                     headers=headers,
-                    json={"mode": "preview", "prompt": prompt, "art_style": "realistic"},
+                    json=preview_payload,
                 )
                 if create_resp.status_code not in (200, 202):
                     raise ProviderError(f"Meshy task creation failed: HTTP {create_resp.status_code} - {create_resp.text}")

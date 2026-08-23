@@ -4,9 +4,13 @@ simplify_geometry_ops.py (which does the actual bmesh/bpy work) so this half
 is unit-testable outside Blender, the same split used by axis_utils.py.
 """
 
+# HERO matches the pipeline-wide default vertex budget for a prominent/
+# AI-generated asset (the panel, super_import, and blender_assets' ai_generate
+# all default target_vertices to 50_000) -- kept in sync so the named preset
+# and the unnamed default mean the same thing.
 PRESETS = {
     "BACKGROUND": 10_000,
-    "HERO": 30_000,
+    "HERO": 50_000,
     "MAX": 100_000,
 }
 

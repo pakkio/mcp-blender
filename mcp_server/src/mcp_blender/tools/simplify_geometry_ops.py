@@ -33,7 +33,7 @@ def register_simplify_geometry_tools(mcp: FastMCP, bridge: BlenderBridge):
     @mcp.tool(
         name="simplify_geometry",
         description=(
-            "Reduce a mesh to a vertex budget (target or preset: BACKGROUND=10k, HERO=30k, MAX=100k) while "
+            "Reduce a mesh to a vertex budget (target or preset: BACKGROUND=10k, HERO=50k, MAX=100k) while "
             "preserving its form. Prefer this over decimate_mesh for imported/downloaded assets: it repairs the "
             "mesh first (welds coincident vertices, drops loose geometry, closes pinhole gaps -- imported meshes "
             "are usually not the welded manifold mesh decimate_mesh assumes, which is why decimate_mesh produces "

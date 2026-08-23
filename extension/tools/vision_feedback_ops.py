@@ -4,9 +4,18 @@ import os
 import tempfile
 from pathlib import Path
 import bpy
+import numpy as np
 from mathutils import Vector
 
 from .base import ToolBase
+
+# RENDERED shading runs 4 full Cycles/EEVEE renders instead of 4 cheap OpenGL
+# viewport captures. On a dense mesh (a raw AI-generated import can arrive at
+# ~2M triangles) that is the same shape of main-thread hang simplify_geometry
+# used to cause: minutes with no progress feedback and no way to cancel. This
+# is a reasoned budget, not a measured one -- override with force_rendered
+# if a specific scene genuinely needs it.
+_RENDERED_POLY_BUDGET = 200_000
 
 
 class CaptureMultiviewAuditTool(ToolBase):
@@ -19,8 +28,23 @@ class CaptureMultiviewAuditTool(ToolBase):
         include_base64 = bool(params.get("include_base64", False))
         resolution = int(params.get("resolution", 1024))
         shading = params.get("shading_mode", "SOLID").upper()
+        force_rendered = bool(params.get("force_rendered", False))
 
         scene = bpy.context.scene
+
+        if shading == "RENDERED" and not force_rendered:
+            total_polys = sum(len(o.data.polygons) for o in scene.objects if o.type == "MESH")
+            if total_polys > _RENDERED_POLY_BUDGET:
+                return {
+                    "success": False,
+                    "message": (
+                        f"Refusing shading_mode='RENDERED' with {total_polys:,} polygons in the scene "
+                        f"(budget {_RENDERED_POLY_BUDGET:,}): four full renders on a mesh this dense can "
+                        "block Blender's main thread for minutes with no progress feedback. Use "
+                        "shading_mode='MATERIAL' or 'SOLID', reduce the geometry first (simplify_geometry), "
+                        "or pass force_rendered=true to proceed anyway."
+                    ),
+                }
 
         # Compute focus center & bounding radius
         if target_name:
@@ -105,8 +129,13 @@ class CaptureMultiviewAuditTool(ToolBase):
                 alpha=True,
             )
 
-            # Read pixels from the 4 rendered quadrants
-            pixels = [0.0] * (composite_size * composite_size * 4)
+            # Read pixels from the 4 rendered quadrants. foreach_get/set + numpy
+            # slicing instead of a per-pixel Python loop: the latter is a
+            # composite_size^2 * 4 iteration nested loop in pure Python -- over
+            # 4M iterations at resolution=1024 -- which is exactly the kind of
+            # per-element Python cost that turned simplify_geometry into a
+            # multi-minute freeze on a dense mesh.
+            composite = np.zeros((composite_size, composite_size, 4), dtype=np.float32)
 
             # Positions in 2x2: (0: Top-Left=Persp, 1: Top-Right=Front, 2: Bottom-Left=Right, 3: Bottom-Right=Top)
             quadrant_offsets = [(0, half), (half, half), (0, 0), (half, 0)]
@@ -115,28 +144,23 @@ class CaptureMultiviewAuditTool(ToolBase):
                 if idx >= 4:
                     break
                 sub_img = bpy.data.images.load(img_path)
-                sub_px = list(sub_img.pixels)
                 # Read the source's actual dimensions rather than assuming
                 # `half` -- with resolution_percentage pinned to 100 above
                 # they now always match, but this keeps the copy from
                 # silently misaligning rows if that ever stops being true.
                 src_w, src_h = sub_img.size
+                src_px = np.empty(src_w * src_h * 4, dtype=np.float32)
+                sub_img.pixels.foreach_get(src_px)
+                src_px = src_px.reshape(src_h, src_w, 4)
+
                 qx, qy = quadrant_offsets[idx]
                 copy_w = min(src_w, half)
                 copy_h = min(src_h, half)
-
-                for y in range(copy_h):
-                    for x in range(copy_w):
-                        src_idx = (y * src_w + x) * 4
-                        dst_x = qx + x
-                        dst_y = qy + y
-                        dst_idx = (dst_y * composite_size + dst_x) * 4
-                        if src_idx + 3 < len(sub_px) and dst_idx + 3 < len(pixels):
-                            pixels[dst_idx : dst_idx + 4] = sub_px[src_idx : src_idx + 4]
+                composite[qy : qy + copy_h, qx : qx + copy_w] = src_px[:copy_h, :copy_w]
 
                 bpy.data.images.remove(sub_img)
 
-            composite_img.pixels = pixels
+            composite_img.pixels.foreach_set(composite.ravel())
             composite_img.filepath_raw = final_out
             composite_img.file_format = "PNG"
             composite_img.save()

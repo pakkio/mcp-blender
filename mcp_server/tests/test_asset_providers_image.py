@@ -170,6 +170,43 @@ async def test_meshy_image_budget_is_part_of_the_cache_key(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
+async def test_meshy_text_to_3d_requests_server_side_remesh(monkeypatch, tmp_path):
+    """target_polycount also applies to text-to-3d, not just image-to-3d: the
+    preview stage sets topology via the same should_remesh/target_polycount
+    fields, and the (optional) refine pass keeps whatever topology preview
+    produced rather than remeshing again."""
+    monkeypatch.setenv("MESHY_API_KEY", "tok")
+    monkeypatch.setattr("mcp_blender.assets.providers.meshy.find_cached_file", lambda *a, **k: None)
+
+    posted = {}
+
+    async def fake_post(self, url, headers=None, json=None):
+        posted["json"] = json
+        return httpx.Response(200, json={"result": "task-txt-1"}, request=httpx.Request("POST", url))
+
+    async def fake_get(self, url, **kwargs):
+        if url.endswith("/task-txt-1"):
+            return httpx.Response(
+                200,
+                json={"status": "SUCCEEDED", "model_urls": {"glb": "https://x/model.glb"}},
+                request=httpx.Request("GET", url),
+            )
+        return httpx.Response(200, content=b"glTF-model-bytes", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    result = await MeshyProvider().download(
+        "meshy_prompt_a_red_chair", str(tmp_path), texture=False, target_polycount=15000
+    )
+
+    assert posted["json"]["mode"] == "preview"
+    assert posted["json"]["should_remesh"] is True
+    assert posted["json"]["target_polycount"] == 15000
+    assert result.filepath.endswith(".glb")
+
+
+@pytest.mark.asyncio
 async def test_meshy_image_without_token_raises_actionable(monkeypatch, tmp_path, png_file):
     monkeypatch.delenv("MESHY_API_KEY", raising=False)
     monkeypatch.setattr("mcp_blender.assets.providers.meshy.find_cached_file", lambda *a, **k: None)
@@ -225,6 +262,40 @@ async def test_tripo_image_download_and_polling(monkeypatch, tmp_path, png_file)
     assert "face_limit" not in posted["json"]  # no budget asked for, none sent
     assert posted["json"]["file"].startswith("data:image/png;base64,")
     assert polls["count"] == 2  # 'running' then 'success'
+    assert result.filepath.endswith(".glb")
+
+
+@pytest.mark.asyncio
+async def test_tripo_text_to_3d_requests_face_limit_without_leaking_into_prompt(monkeypatch, tmp_path):
+    """face_limit must reach the request, and the cache-key polycount suffix
+    must never leak into the prompt text sent to the API -- appending it to
+    asset_id before deriving the prompt would send 'a red chair p15000'."""
+    monkeypatch.setenv("TRIPO_API_KEY", "tok")
+    monkeypatch.setattr("mcp_blender.assets.providers.tripo.find_cached_file", lambda *a, **k: None)
+
+    posted = {}
+
+    async def fake_post(self, url, headers=None, json=None):
+        posted["json"] = json
+        return httpx.Response(200, json={"data": {"task_id": "t-text-1"}}, request=httpx.Request("POST", url))
+
+    async def fake_get(self, url, **kwargs):
+        if str(url).endswith("/task/t-text-1"):
+            return httpx.Response(
+                200,
+                json={"data": {"status": "success", "output": {"model": "https://x/m.glb"}}},
+                request=httpx.Request("GET", url),
+            )
+        return httpx.Response(200, content=b"glTF-bytes", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    result = await TripoProvider().download("tripo_a_red_chair", str(tmp_path), target_polycount=15000)
+
+    assert posted["json"]["type"] == "text_to_model"
+    assert posted["json"]["prompt"] == "a red chair"
+    assert posted["json"]["face_limit"] == 15000
     assert result.filepath.endswith(".glb")
 
 

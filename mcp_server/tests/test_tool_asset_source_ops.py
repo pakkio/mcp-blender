@@ -221,8 +221,10 @@ async def test_import_online_asset_pushes_client_status_with_provider_target_and
     assert any("polyhaven" in t for t in status_texts if t)
     # A push after the download names the license/attribution -- "credits".
     assert any("CC0" in t and "chair1' by Poly Haven" in t for t in status_texts if t)
-    # A push during simplification carries the actual vertex target.
-    assert any("5200" in t for t in status_texts if t)  # 10000 * 26000/50000
+    # A push during simplification carries the actual vertex target. Single
+    # object, so its share of the (vertex-denominated) budget is the whole
+    # 10000 unchanged -- not scaled by its own triangle/vertex ratio.
+    assert any("10000" in t for t in status_texts if t)
     # And it's cleared on completion (finally-clause), not left dangling.
     assert status_texts[-1] is None
 
@@ -297,6 +299,63 @@ async def test_import_online_asset_include_preview_false_skips_capture(monkeypat
 
     assert result["preview_base64"] is None
     assert not any(c.args[0] == "inspect_focus_shot" for c in bridge.send_request.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_import_online_asset_splits_vertex_budget_proportionally_across_objects(monkeypatch, tmp_path):
+    """target_poly_budget is a VERTEX budget despite the name (matches every
+    other caller: the panel, super_import, blender_assets' target_vertices).
+    A previous version of this code mistakenly treated it as a triangle
+    budget when splitting it across objects, silently landing a 50k vertex
+    request at roughly half that. Two objects with different vertex counts
+    pin down that the split is now exact, and that the decimate fallback's
+    ratio is derived from that same per-object vertex target."""
+    downloaded = DownloadedAsset(
+        filepath=str(tmp_path / "rig.glb"), provider="polyhaven", asset_id="rig1",
+        license="CC0", attribution="'rig1' by Poly Haven (CC0)", from_cache=False,
+    )
+    (tmp_path / "rig.glb").write_bytes(b"glb-bytes")
+    provider = _FakeProvider("polyhaven", download_result=downloaded)
+
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.get_provider", lambda name: provider)
+    monkeypatch.setattr("mcp_blender.tools.asset_source_ops.cache_dir", lambda p, a: tmp_path)
+
+    seen_targets = {}
+    seen_ratios = {}
+
+    async def send_request(method, params, timeout=None):
+        if method == "import_file":
+            return {"success": True, "imported_objects": ["Big", "Small"]}
+        if method == "get_object_info":
+            data = {
+                "Big": {"polygons_count": 180000, "vertices_count": 90000},
+                "Small": {"polygons_count": 20000, "vertices_count": 10000},
+            }[params["name"]]
+            return {
+                "success": True, "type": "MESH", "parent": None,
+                "dimensions": [1.0, 1.0, 1.0], "mesh_data": data,
+            }
+        if method == "simplify_geometry":
+            seen_targets[params["object_name"]] = params["target"]
+            return {"success": False, "message": "quality gate failed"}  # force the decimate fallback
+        if method == "decimate_mesh":
+            seen_ratios[params["object_name"]] = params["ratio"]
+            return {"success": True}
+        return {"success": True}
+
+    bridge = AsyncMock()
+    bridge.send_request.side_effect = send_request
+
+    _search_fn, import_fn = register_asset_source_tools(FakeMCP(), bridge)
+    # Total vertices before = 100000; budget 50000 -> Big (90% share) gets
+    # 45000, Small (10% share) gets 5000.
+    result = await import_fn(asset_id="rig1", provider="polyhaven", target_poly_budget=50000)
+
+    assert result["success"] is True
+    assert seen_targets["Big"] == 45000
+    assert seen_targets["Small"] == 5000
+    assert seen_ratios["Big"] == pytest.approx(45000 / 90000)
+    assert seen_ratios["Small"] == pytest.approx(5000 / 10000)
 
 
 @pytest.mark.asyncio

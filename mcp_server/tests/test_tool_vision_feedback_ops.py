@@ -28,7 +28,9 @@ async def test_capture_multiview_audit_happy_path():
             "include_base64": False,
             "resolution": 1024,
             "shading_mode": "SOLID",
+            "force_rendered": False,
         },
+        timeout=600.0,
     )
     assert result["output_filepath"] == "/tmp/audit.png"
 
@@ -57,5 +59,6 @@ async def test_inspect_focus_shot_happy_path():
             "output_filepath": None,
             "include_base64": False,
         },
+        timeout=600.0,
     )
     assert result["target_object"] == "Character"

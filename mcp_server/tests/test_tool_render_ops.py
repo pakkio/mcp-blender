@@ -32,6 +32,7 @@ async def test_render_scene_happy_path():
             "transparent_background": None,
             "animation": False,
             "return_image_base64": False,
+            "force": False,
         },
         timeout=HEAVY_REQUEST_TIMEOUT_S,
     )

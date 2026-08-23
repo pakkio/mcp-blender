@@ -7,9 +7,13 @@ mesh apart into disconnected shells; simplify_geometry's weld-first repair
 should not.
 """
 
+import math
+
 import bmesh
 import bpy
+from mathutils import Vector
 
+from extension.tools.simplify_geometry_ops import _PREPASS_FACTOR
 from tests_live.base_case import LiveBpyTestCase
 
 
@@ -227,6 +231,150 @@ class TestLiveSimplifyGeometry(LiveBpyTestCase):
         self.assertEqual(result["result_vertices"], original_verts)
         self.assertEqual(len(sphere.data.vertices), original_verts)
         self.assertIn("suggested_retry_target", result)
+
+    def test_prepass_engages_and_gate_still_measures_true_original(self):
+        """A mesh far enough above budget to trigger _fast_prepass must still
+        report/measure against its real starting point, not the intermediate
+        pre-passed mesh -- a caller reading original_vertices or deviation
+        should never see the cheap prepass leak into either.
+        """
+        bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=7, radius=1.0)  # 40962 vertices
+        sphere = bpy.context.object
+        sphere.name = "PrepassSphere"
+        original_verts = len(sphere.data.vertices)
+        target = 1000  # 40962 / 1000 ~= 41x, comfortably above the 8x prepass threshold
+
+        tool = self.get_tool("simplify_geometry")
+        result = tool.execute({"object_name": "PrepassSphere", "target": target, "tolerance": 0.15})
+
+        self.assertIsNotNone(result.get("prepass"), "expected the pre-pass to engage on a 41x-over-budget mesh")
+        self.assertGreater(result["prepass"]["vertices_before"], target * _PREPASS_FACTOR)
+        self.assertGreater(result["prepass"]["vertices_before"], result["prepass"]["vertices_after"])
+
+        # Reporting must reflect the true original, unaffected by the prepass.
+        self.assertEqual(result["original_vertices"], original_verts)
+        self.assertTrue(result["deviation"]["two_sided"], "sphere is well under the two-sided face limit")
+        self.assertLess(result["deviation"]["max_pct"], 5.0, result["deviation"])
+
+    def test_preserve_boundaries_protects_hole_rim(self):
+        """A hole cut into a dense grid (too many sides for holes_fill's
+        pinhole repair to silently close back up) must survive aggressive
+        reduction far better with preserve_boundaries=True than False.
+        """
+
+        def _build_grid_with_hole(name):
+            bpy.ops.mesh.primitive_grid_add(x_subdivisions=60, y_subdivisions=60, size=2)
+            obj = bpy.context.object
+            obj.name = name
+            bm = bmesh.new()
+            bm.from_mesh(obj.data)
+            # A gentle height field keeps the surface non-planar: a perfectly
+            # flat grid gets almost entirely eaten by the angle-limited
+            # dissolve pass that runs before collapse, which would finish the
+            # whole reduction on its own and leave preserve_boundaries (a
+            # collapse-only setting) nothing to actually affect.
+            for v in bm.verts:
+                v.co.z = 0.08 * math.sin(v.co.x * 4.0) * math.cos(v.co.y * 4.0)
+            bmesh.ops.triangulate(bm, faces=bm.faces)
+            hole_faces = [
+                f for f in bm.faces
+                if abs(f.calc_center_median().x) < 0.3 and abs(f.calc_center_median().y) < 0.3
+            ]
+            bmesh.ops.delete(bm, geom=hole_faces, context="FACES")
+            bm.to_mesh(obj.data)
+            obj.data.update()
+            bm.free()
+            return obj
+
+        preserved = _build_grid_with_hole("GridHolePreserved")
+        unprotected = _build_grid_with_hole("GridHoleUnprotected")
+        original_boundary_edges = _boundary_edge_count(preserved)
+        self.assertGreater(original_boundary_edges, 20, "hole should be large enough to have a real rim")
+
+        tool = self.get_tool("simplify_geometry")
+        common = {
+            "target": 300,
+            "tolerance": 0.3,
+            "max_deviation_pct": 50.0,
+            "rollback_on_failure": False,
+        }
+        res_preserved = tool.execute({**common, "object_name": "GridHolePreserved", "preserve_boundaries": True})
+        res_unprotected = tool.execute({**common, "object_name": "GridHoleUnprotected", "preserve_boundaries": False})
+        self.assertTrue(res_preserved["collapse"]["applied"], "collapse must actually engage for this test to mean anything")
+        self.assertTrue(res_unprotected["collapse"]["applied"], "collapse must actually engage for this test to mean anything")
+
+        preserved_boundary_after = _boundary_edge_count(preserved)
+        unprotected_boundary_after = _boundary_edge_count(unprotected)
+        self.assertGreater(
+            preserved_boundary_after, unprotected_boundary_after,
+            f"preserve_boundaries=True kept {preserved_boundary_after} rim edges vs "
+            f"{unprotected_boundary_after} without it -- expected the protected rim to survive better",
+        )
+
+    def test_collapse_solver_applies_best_sample_not_last(self):
+        """Regression guard for _weighted_collapse's best-of-samples pick: the
+        applied ratio must be the sample closest to target, which is only
+        provably different from 'whatever the last iteration guessed' when
+        the solve does not cleanly converge.
+        """
+        bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=6, radius=1.0)
+        sphere = bpy.context.object
+        sphere.name = "SolverSphere"
+
+        tool = self.get_tool("simplify_geometry")
+        # An unreasonably tight tolerance all but guarantees the solve runs
+        # every iteration without ever hitting "within tolerance".
+        result = tool.execute({"object_name": "SolverSphere", "target": 2000, "tolerance": 0.0001})
+
+        self.assertTrue(result.get("success"), result.get("message"))
+        samples = result["collapse"]["solver_samples"]
+        self.assertGreaterEqual(len(samples), 2)
+        best_ratio, best_verts = min(samples, key=lambda s: abs(s[1] - 2000))
+        self.assertEqual(result["collapse"]["predicted_vertices"], best_verts)
+        self.assertAlmostEqual(result["collapse"]["final_ratio"], best_ratio, places=4)
+
+    def test_repair_restores_uvs_on_filled_pinholes(self):
+        """holes_fill closes pinhole gaps in _repair; regression guard that the
+        new faces it creates get real UVs copied from their surviving
+        neighbours instead of the bmesh default (0, 0), which on a textured
+        mesh renders as a flat wrong-coloured patch.
+        """
+        bpy.ops.mesh.primitive_grid_add(x_subdivisions=14, y_subdivisions=14, size=2)
+        obj = bpy.context.object
+        obj.name = "UVPinholeGrid"
+
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        # A gentle height field keeps the surface non-planar so the dissolve
+        # pass right after repair (angle-limited) doesn't flatten the whole
+        # thing away and wash out what this test is checking.
+        for v in bm.verts:
+            v.co.z = 0.08 * math.sin(v.co.x * 3.0) * math.cos(v.co.y * 3.0)
+        bmesh.ops.triangulate(bm, faces=bm.faces)
+        uv_layer = bm.loops.layers.uv.verify()
+        for face in bm.faces:
+            for loop in face.loops:
+                co = loop.vert.co
+                loop[uv_layer].uv = ((co.x + 1.0) / 2.0, (co.y + 1.0) / 2.0)
+
+        # Poke a single-face pinhole away from the true UV(0, 0) corner.
+        hole_face = min(
+            bm.faces, key=lambda f: (f.calc_center_median() - Vector((0.3, 0.3, 0.0))).length
+        )
+        bmesh.ops.delete(bm, geom=[hole_face], context="FACES")
+        bm.to_mesh(obj.data)
+        obj.data.update()
+        bm.free()
+
+        tool = self.get_tool("simplify_geometry")
+        current_verts = len(obj.data.vertices)
+        result = tool.execute(
+            {"object_name": "UVPinholeGrid", "target": current_verts - 1, "tolerance": 0.9}
+        )
+
+        self.assertTrue(result.get("success"), result.get("message"))
+        self.assertGreater(result["repair"]["pinhole_faces_filled"], 0, "expected the pinhole to be filled")
+        self.assertGreater(result["repair"]["uv_loops_patched"], 0, "expected the new face's UVs to be patched")
 
     def test_dry_run_changes_nothing(self):
         bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=3, radius=1.0)

@@ -50,9 +50,17 @@ class TripoProvider:
         target_polycount: int | None = None,
     ) -> DownloadedAsset:
         # Tripo spells the server-side polygon budget `face_limit`; it applies
-        # to image_to_model only, and the budget is part of the cache key
-        # because the same picture at a different budget is a different model.
-        if target_polycount and asset_id.startswith("tripo_img_"):
+        # to both image_to_model and text_to_model. The prompt/image-ness is
+        # read off the ORIGINAL id before any suffix is appended below, since
+        # the text_to_model prompt is derived from this id by stripping the
+        # 'tripo_' prefix -- a polycount suffix appended first would leak into
+        # the prompt text sent to the API.
+        is_image = asset_id.startswith("tripo_img_")
+        prompt = None if is_image else asset_id.replace("tripo_", "").replace("_", " ")
+
+        # The budget is part of the cache key because the same prompt/picture
+        # at a different budget is a different model.
+        if target_polycount:
             asset_id = f"{asset_id}_p{int(target_polycount)}"
         cached = find_cached_file(self.name, asset_id)
         if cached is not None:
@@ -71,18 +79,17 @@ class TripoProvider:
 
         headers = {"Authorization": f"Bearer {token}"}
 
-        if asset_id.startswith("tripo_img_"):
+        if is_image:
             if not image_path:
                 raise ProviderError(
                     f"Tripo3D image task '{asset_id}' needs its source image; "
                     "pass image_path again."
                 )
             body = {"type": "image_to_model", "file": image_util.to_data_uri(image_path)}
-            if target_polycount:
-                body["face_limit"] = int(target_polycount)
         else:
-            prompt = asset_id.replace("tripo_", "").replace("_", " ")
             body = {"type": "text_to_model", "prompt": prompt}
+        if target_polycount:
+            body["face_limit"] = int(target_polycount)
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(f"{BASE_URL}/task", headers=headers, json=body)

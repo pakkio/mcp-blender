@@ -1,7 +1,11 @@
 """Live tests for Python escape hatch, batch execution, system ops, and dispatch queue inside Blender."""
 
+import time
+from concurrent.futures import Future
+
 import bpy
 from extension.bridge import dispatch
+from extension.bridge.dispatch import QueuedRequest
 from extension.tools import TOOL_REGISTRY
 from extension.tools.base import ToolBase
 from tests_live.base_case import LiveBpyTestCase
@@ -152,6 +156,54 @@ class TestLiveSystemBatchDispatch(LiveBpyTestCase):
         dispatch.set_client_status(None)
         self.assertFalse(dispatch.get_status()["busy"])
         self.assertIsNone(dispatch.get_status()["client_status"])
+
+    def test_bridge_dispatch_discards_stale_queued_request(self):
+        # A request that has sat in the queue far longer than any client
+        # would still be waiting (main thread blocked on an earlier heavy
+        # call) must be discarded rather than executed when the queue finally
+        # drains -- never running the underlying tool at all.
+        calls = []
+
+        class _ProbeTool(ToolBase):
+            name = "test_probe_stale_tool"
+            description = "Live-test-only probe that must never run for a stale request."
+
+            def execute(self, params: dict) -> dict:
+                calls.append(params)
+                return {"success": True}
+
+        probe = _ProbeTool()
+        TOOL_REGISTRY[probe.name] = probe
+        try:
+            future: Future = Future()
+            stale_item = QueuedRequest(
+                request_id="live-req-stale",
+                method=probe.name,
+                params={},
+                future=future,
+                generation=dispatch.get_generation(),
+                enqueued_at=time.time() - (dispatch._STALE_QUEUE_AGE_S + 1.0),
+            )
+            dispatch._queue.put(stale_item)
+            dispatch.drain_queue()
+        finally:
+            del TOOL_REGISTRY[probe.name]
+
+        self.assertTrue(future.done())
+        self.assertEqual(calls, [])
+        envelope = future.result()
+        self.assertIn("error", envelope)
+        self.assertIn("Discarded", envelope["error"]["message"])
+
+        # A freshly enqueued request for the same tool must still run normally.
+        TOOL_REGISTRY[probe.name] = probe
+        try:
+            fresh_future = dispatch.enqueue("live-req-fresh", probe.name, {"ok": True})
+            dispatch.drain_queue()
+        finally:
+            del TOOL_REGISTRY[probe.name]
+        self.assertEqual(calls, [{"ok": True}])
+        self.assertTrue(fresh_future.result()["result"]["success"])
 
     def test_client_status_and_dispatch_execution_can_both_be_reported(self):
         seen = {}

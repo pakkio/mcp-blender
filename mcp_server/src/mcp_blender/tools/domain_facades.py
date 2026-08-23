@@ -342,7 +342,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "local .png/.jpg/.jpeg/.webp file, for image-to-3d; Meshy/Tripo generate directly from the "
             "picture, Trellis additionally requires TRELLIS_ENDPOINT_URL + TRELLIS_API_KEY or HF_TOKEN). "
             "Optional: provider ('meshy'|'tripo'|'trellis', default 'meshy'), target_vertices "
-            "(post-generation vertex budget, default 30000), reduction_method -- 'simplify' (default, "
+            "(post-generation vertex budget, default 50000), reduction_method -- 'simplify' (default, "
             "form-preserving weld+dissolve+iterative collapse; higher quality but can run for minutes on a "
             "dense/complex generated mesh), 'decimate' (plain ratio decimate, much faster, use this for quick "
             "iteration or if 'simplify' is timing out), 'remesh' (voxel remesh, destroys UVs -- avoid, "

@@ -20,6 +20,7 @@ class RenderSceneParams(BaseModel):
     transparent_background: Optional[bool] = None
     animation: bool = False
     return_image_base64: bool = False
+    force: bool = False
 
 
 class GetViewportScreenshotParams(BaseModel):
@@ -42,7 +43,9 @@ def register_render_tools(mcp: FastMCP, bridge: BlenderBridge):
     @mcp.tool(
         name="render_scene",
         description="Render the active scene to an image file or base64 string, with customizable engine, resolution, samples, and transparency. "
-        "With return_image_base64=True the image is returned as real image content the model can see, not just a text field.",
+        "With return_image_base64=True the image is returned as real image content the model can see, not just a text field. "
+        "Refuses to start a render above a resolution/sample-count safety cap (there is no way to cancel a render once "
+        "started); pass force=true to render anyway.",
         structured_output=False,
     )
     async def render_scene(
@@ -55,6 +58,7 @@ def register_render_tools(mcp: FastMCP, bridge: BlenderBridge):
         transparent_background: Optional[bool] = None,
         animation: bool = False,
         return_image_base64: bool = False,
+        force: bool = False,
     ) -> list | dict:
         params = RenderSceneParams(
             output_path=output_path,
@@ -66,6 +70,7 @@ def register_render_tools(mcp: FastMCP, bridge: BlenderBridge):
             transparent_background=transparent_background,
             animation=animation,
             return_image_base64=return_image_base64,
+            force=force,
         )
         result = await bridge.send_request(
             "render_scene", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S

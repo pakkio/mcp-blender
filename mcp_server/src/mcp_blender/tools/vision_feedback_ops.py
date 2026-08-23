@@ -2,7 +2,7 @@ from typing import Literal, Optional
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
-from ..bridge import BlenderBridge
+from ..bridge import HEAVY_REQUEST_TIMEOUT_S, BlenderBridge
 from ..errors import BridgeError, ErrorType
 from ..images import image_result
 
@@ -15,6 +15,7 @@ class CaptureMultiviewAuditParams(BaseModel):
     include_base64: bool = False
     resolution: int = 1024
     shading_mode: AuditShading = "SOLID"
+    force_rendered: bool = False
 
 
 class InspectFocusShotParams(BaseModel):
@@ -31,7 +32,9 @@ def register_vision_feedback_tools(mcp: FastMCP, bridge: BlenderBridge):
         name="capture_multiview_audit",
         description="Capture a 4-angle visual inspection contact sheet (Front, Right Side, Top, and 3/4 Perspective) of the scene or target object for multimodal AI vision analysis. "
         "With include_base64=True the contact sheet is returned as real image content -- use this to actually verify your work. "
-        "If you cannot see the returned image yourself, call evaluate_scene_visually instead of guessing.",
+        "If you cannot see the returned image yourself, call evaluate_scene_visually instead of guessing. "
+        "shading_mode='RENDERED' runs 4 full renders and is refused above a scene polygon budget (reduce the "
+        "geometry first, use 'MATERIAL'/'SOLID' instead, or pass force_rendered=true).",
         structured_output=False,
     )
     async def capture_multiview_audit(
@@ -40,6 +43,7 @@ def register_vision_feedback_tools(mcp: FastMCP, bridge: BlenderBridge):
         include_base64: bool = False,
         resolution: int = 1024,
         shading_mode: AuditShading = "SOLID",
+        force_rendered: bool = False,
     ) -> list | dict:
         params = CaptureMultiviewAuditParams(
             target_object=target_object,
@@ -47,8 +51,11 @@ def register_vision_feedback_tools(mcp: FastMCP, bridge: BlenderBridge):
             include_base64=include_base64,
             resolution=resolution,
             shading_mode=shading_mode,
+            force_rendered=force_rendered,
         )
-        result = await bridge.send_request("capture_multiview_audit", params.model_dump())
+        result = await bridge.send_request(
+            "capture_multiview_audit", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S
+        )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "capture_multiview_audit failed"))
         return image_result(result, "base64_data_uri")
@@ -75,7 +82,9 @@ def register_vision_feedback_tools(mcp: FastMCP, bridge: BlenderBridge):
             output_filepath=output_filepath,
             include_base64=include_base64,
         )
-        result = await bridge.send_request("inspect_focus_shot", params.model_dump())
+        result = await bridge.send_request(
+            "inspect_focus_shot", params.model_dump(), timeout=HEAVY_REQUEST_TIMEOUT_S
+        )
         if not result.get("success"):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "inspect_focus_shot failed"))
         return image_result(result)

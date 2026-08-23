@@ -14,7 +14,7 @@ _spec.loader.exec_module(planner)
 
 
 def test_resolve_target_preset():
-    assert planner.resolve_target_vertices(preset="hero") == (30_000, None)
+    assert planner.resolve_target_vertices(preset="hero") == (50_000, None)
     assert planner.resolve_target_vertices(preset="MAX") == (100_000, None)
     _, err = planner.resolve_target_vertices(preset="ULTRA")
     assert "Unknown preset" in err

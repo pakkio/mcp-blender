@@ -159,6 +159,13 @@ class SimplifyGeometryTool(ToolBase):
         max_deviation_pct = float(params.get("max_deviation_pct", 2.0))
         allow_new_holes = int(params.get("allow_new_holes", 0))
         rollback_on_failure = bool(params.get("rollback_on_failure", True))
+        # Reasoned defaults, not measured thresholds (see TODO.md #10) -- exposed
+        # so a caller who hits a bad tradeoff on a specific mesh can override
+        # them instead of waiting on a code change.
+        prepass_factor = float(params.get("prepass_factor", _PREPASS_FACTOR))
+        deviation_two_sided_max_faces = int(
+            params.get("deviation_two_sided_max_faces", _DEVIATION_TWO_SIDED_MAX_FACES)
+        )
 
         # Private convention with callers that drive the HUD themselves (see
         # super_import_ops): map this run's 0-100% onto their slice of the bar
@@ -237,8 +244,8 @@ class SimplifyGeometryTool(ToolBase):
             post_dissolve_verts = len(obj.data.vertices)
 
             prepass_stats = None
-            if post_dissolve_verts > target_verts * _PREPASS_FACTOR:
-                prepass_target = target_verts * _PREPASS_FACTOR
+            if post_dissolve_verts > target_verts * prepass_factor:
+                prepass_target = int(target_verts * prepass_factor)
                 progress.phase(
                     f"Pre-pass collapse {post_dissolve_verts:,} -> ~{prepass_target:,} vertices...",
                     0.35,
@@ -262,7 +269,9 @@ class SimplifyGeometryTool(ToolBase):
             result_verts = len(obj.data.vertices)
 
             progress.phase("Measuring surface deviation...", 0.9, force=True)
-            deviation = _measure_deviation(original_mesh_copy, obj.data)
+            deviation = _measure_deviation(
+                original_mesh_copy, obj.data, two_sided_max_faces=deviation_two_sided_max_faces
+            )
             new_boundary_edges = _count_boundary_edges(obj.data) - analysis["boundary_edges"]
             new_boundary_edges = max(0, new_boundary_edges)
 
@@ -528,9 +537,12 @@ def _repair(bm, weld_factor, diag):
 
     boundary_edges = [e for e in bm.edges if len(e.link_faces) == 1]
     filled = 0
+    uv_patched = 0
     if boundary_edges:
         fill_result = bmesh.ops.holes_fill(bm, edges=boundary_edges, sides=4)
-        filled = len(fill_result.get("faces", []))
+        new_faces = fill_result.get("faces", [])
+        filled = len(new_faces)
+        uv_patched = _restore_uvs_on_filled_faces(bm, new_faces)
 
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
 
@@ -539,7 +551,36 @@ def _repair(bm, weld_factor, diag):
         "loose_vertices_removed": len(loose_verts),
         "loose_edges_removed": len(loose_edges),
         "pinhole_faces_filled": filled,
+        "uv_loops_patched": uv_patched,
     }
+
+
+def _restore_uvs_on_filled_faces(bm, new_faces):
+    """Give newly created hole-fill faces real UVs instead of the (0, 0)
+    default, which on a textured mesh samples a single wrong-coloured texel
+    across the whole patch.
+
+    holes_fill only ever connects existing boundary vertices -- it never
+    introduces a new one -- so every corner of a new face is a vertex that
+    already carried a UV from one of its *other*, pre-existing faces. Pinhole
+    boundaries sit inside one UV island by construction (that is what makes
+    them a pinhole rather than a seam), so copying the nearest surviving UV
+    for each vertex is exact, not an approximation.
+    """
+    uv_layer = bm.loops.layers.uv.active
+    if uv_layer is None or not new_faces:
+        return 0
+
+    new_face_set = set(new_faces)
+    patched = 0
+    for face in new_faces:
+        for loop in face.loops:
+            for other_loop in loop.vert.link_loops:
+                if other_loop.face not in new_face_set:
+                    loop[uv_layer].uv = other_loop[uv_layer].uv
+                    patched += 1
+                    break
+    return patched
 
 
 def _dissolve_flat(bm, angle_limit_deg, delimit):
@@ -767,7 +808,7 @@ def _sample_points(coords, limit):
     return coords[::stride].tolist()
 
 
-def _measure_deviation(original_mesh, result_mesh):
+def _measure_deviation(original_mesh, result_mesh, two_sided_max_faces=_DEVIATION_TWO_SIDED_MAX_FACES):
     """Two-sided surface deviation between the original and simplified mesh,
     as a percentage of the original's bbox diagonal.
 
@@ -799,7 +840,7 @@ def _measure_deviation(original_mesh, result_mesh):
         if dist is not None:
             distances.append(dist)
 
-    two_sided = len(original_mesh.polygons) <= _DEVIATION_TWO_SIDED_MAX_FACES
+    two_sided = len(original_mesh.polygons) <= two_sided_max_faces
     if two_sided:
         bm_orig = bmesh.new()
         bm_orig.from_mesh(original_mesh)
