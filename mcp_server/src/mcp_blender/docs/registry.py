@@ -265,6 +265,7 @@ DOMAIN_DOCS: dict[str, dict[str, Any]] = {
             "sun_sky_rig": "Create a physical Nishita sun/sky environment atmosphere. Params: sun_elevation, sun_rotation, turbidity, sky_type.",
             "screenshot": "Capture an OpenGL viewport screenshot returned as real image content. Params: output_path.",
             "evaluate_scene": "Run cheap VLM visual critique on scene composition, lighting, and materials. Params: custom_prompt.",
+            "raycast": "Cast a ray from a camera toward a target and list every object hit along the way, in order, with distances -- diagnoses occlusion. Params: camera_name, target_object, target_location, max_distance, max_hits.",
         },
     },
     "blender_physics_sim": {
@@ -286,6 +287,7 @@ DOMAIN_DOCS: dict[str, dict[str, Any]] = {
             "export_unity_fbx": "Export FBX specifically tailored for Unity with axis orientation fixes and baked anims. Params: filepath, selected_only, bake_anim, embed_textures.",
             "generate_lods": "Auto-generate LOD0..LODn reduction chain. Params: object_name, ratios ([1.0, 0.5, 0.25, 0.1]), group_name.",
             "vfx_tracking": "Configure movie clip camera tracking and shadow catcher planes for live VFX composite. Params: clip_path, plane_name.",
+            "sample_pixels": "Sample the average RGBA color over a region of the last render (or a saved PNG) to confirm what actually reached the output, without decoding a full image. Params: x, y, width, height, image_path.",
         },
     },
 }

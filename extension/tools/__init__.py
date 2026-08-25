@@ -25,7 +25,12 @@ from .asset_browser_ops import (
 )
 from .batch_execution_ops import ExecuteBatchTool
 from .boolean_ops import BooleanOperationTool
-from .camera_ops import CameraLookAtTool, ConfigureCameraTool, FrameObjectsTool
+from .camera_ops import (
+    CameraLookAtTool,
+    ConfigureCameraTool,
+    FrameObjectsTool,
+    RaycastFromCameraTool,
+)
 from .checkpoint_ops import (
     CreateSceneCheckpointTool,
     ListSceneCheckpointsTool,
@@ -108,6 +113,7 @@ from .render_effects_ops import (
 from .render_ops import (
     GetViewportScreenshotTool,
     RenderSceneTool,
+    SampleRenderPixelsTool,
     SetRenderSettingsTool,
 )
 from .rigging_ops import (
@@ -202,11 +208,13 @@ ALL_TOOLS = (
     ConfigureCameraTool(),
     CameraLookAtTool(),
     FrameObjectsTool(),
+    RaycastFromCameraTool(),
     SetKeyframeTool(),
     DeleteKeyframeTool(),
     SetTimelineRangeTool(),
     RenderSceneTool(),
     GetViewportScreenshotTool(),
+    SampleRenderPixelsTool(),
     SetRenderSettingsTool(),
     ManageCollectionTool(),
     ExportSceneTool(),

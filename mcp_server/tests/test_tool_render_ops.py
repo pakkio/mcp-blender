@@ -16,7 +16,7 @@ async def test_render_scene_happy_path():
         "output_path": "C:/tmp/render.png",
         "render_time_seconds": 1.2,
     }
-    render_sc, get_ss, set_rs = register_render_tools(FakeMCP(), bridge)
+    render_sc, get_ss, set_rs, sample_px = register_render_tools(FakeMCP(), bridge)
 
     result = await render_sc(output_path="C:/tmp/render.png", engine="CYCLES", samples=64)
 
@@ -48,7 +48,7 @@ async def test_get_viewport_screenshot_happy_path():
         "output_path": "C:/tmp/viewport.png",
         "image_base64": base64.b64encode(raw_bytes).decode("utf-8"),
     }
-    render_sc, get_ss, set_rs = register_render_tools(FakeMCP(), bridge)
+    render_sc, get_ss, set_rs, sample_px = register_render_tools(FakeMCP(), bridge)
 
     result = await get_ss(output_path="C:/tmp/viewport.png", return_image_base64=True)
 
@@ -73,8 +73,28 @@ async def test_get_viewport_screenshot_without_base64_returns_dict():
         "success": True,
         "output_path": "C:/tmp/viewport.png",
     }
-    render_sc, get_ss, set_rs = register_render_tools(FakeMCP(), bridge)
+    render_sc, get_ss, set_rs, sample_px = register_render_tools(FakeMCP(), bridge)
 
     result = await get_ss(output_path="C:/tmp/viewport.png", return_image_base64=False)
 
     assert result == {"success": True, "output_path": "C:/tmp/viewport.png"}
+
+
+@pytest.mark.asyncio
+async def test_sample_render_pixels_happy_path():
+    bridge = AsyncMock()
+    bridge.send_request.return_value = {
+        "success": True,
+        "image_size": [1920, 1080],
+        "region": [10, 20, 4, 4],
+        "average_rgba": [1.0, 0.0, 1.0, 1.0],
+    }
+    render_sc, get_ss, set_rs, sample_px = register_render_tools(FakeMCP(), bridge)
+
+    result = await sample_px(x=10, y=20, width=4, height=4)
+
+    bridge.send_request.assert_awaited_once_with(
+        "sample_render_pixels",
+        {"x": 10, "y": 20, "width": 4, "height": 4, "image_path": None},
+    )
+    assert result["average_rgba"] == [1.0, 0.0, 1.0, 1.0]

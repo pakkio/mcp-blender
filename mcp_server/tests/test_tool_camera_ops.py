@@ -9,7 +9,7 @@ from mcp_blender.tools.camera_ops import register_camera_tools
 async def test_configure_camera_happy_path():
     bridge = AsyncMock()
     bridge.send_request.return_value = {"success": True, "name": "Camera", "lens": 85.0}
-    config_cam, look_at, frame_obs = register_camera_tools(FakeMCP(), bridge)
+    config_cam, look_at, frame_obs, raycast = register_camera_tools(FakeMCP(), bridge)
 
     result = await config_cam(name="Camera", lens=85.0, set_as_active_camera=True)
 
@@ -35,7 +35,7 @@ async def test_configure_camera_happy_path():
 async def test_camera_look_at_happy_path():
     bridge = AsyncMock()
     bridge.send_request.return_value = {"success": True, "camera_name": "Camera"}
-    config_cam, look_at, frame_obs = register_camera_tools(FakeMCP(), bridge)
+    config_cam, look_at, frame_obs, raycast = register_camera_tools(FakeMCP(), bridge)
 
     result = await look_at(camera_name="Camera", target_location=(0.0, 0.0, 1.0))
 
@@ -49,3 +49,29 @@ async def test_camera_look_at_happy_path():
         },
     )
     assert result["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_raycast_from_camera_happy_path():
+    bridge = AsyncMock()
+    bridge.send_request.return_value = {
+        "success": True,
+        "camera_name": "Camera",
+        "hits": [{"name": "ControlSphere", "distance": 3.5, "location": [0.0, 0.0, 0.5]}],
+        "hit_count": 1,
+    }
+    config_cam, look_at, frame_obs, raycast = register_camera_tools(FakeMCP(), bridge)
+
+    result = await raycast(camera_name="Camera", target_object="Bear")
+
+    bridge.send_request.assert_awaited_once_with(
+        "raycast_from_camera",
+        {
+            "camera_name": "Camera",
+            "target_location": None,
+            "target_object": "Bear",
+            "max_distance": None,
+            "max_hits": 10,
+        },
+    )
+    assert result["hit_count"] == 1

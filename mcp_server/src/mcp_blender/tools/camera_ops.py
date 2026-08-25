@@ -34,6 +34,14 @@ class FrameObjectsParams(BaseModel):
     margin: float = 1.5
 
 
+class RaycastFromCameraParams(BaseModel):
+    camera_name: Optional[str] = None
+    target_location: Optional[tuple[float, float, float]] = None
+    target_object: Optional[str] = None
+    max_distance: Optional[float] = None
+    max_hits: int = 10
+
+
 def register_camera_tools(mcp: FastMCP, bridge: BlenderBridge):
     @mcp.tool(
         name="configure_camera",
@@ -108,4 +116,29 @@ def register_camera_tools(mcp: FastMCP, bridge: BlenderBridge):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "frame_objects failed"))
         return result
 
-    return configure_camera, camera_look_at, frame_objects
+    @mcp.tool(
+        name="raycast_from_camera",
+        description="Cast a ray from a camera toward a target point/object (or straight ahead down the camera's "
+        "view direction) and list every object hit along the way, in order, with distances -- answers 'what's "
+        "actually between the camera and my target' in one call instead of a hide/render/diff loop.",
+    )
+    async def raycast_from_camera(
+        camera_name: Optional[str] = None,
+        target_location: Optional[tuple[float, float, float]] = None,
+        target_object: Optional[str] = None,
+        max_distance: Optional[float] = None,
+        max_hits: int = 10,
+    ) -> dict:
+        params = RaycastFromCameraParams(
+            camera_name=camera_name,
+            target_location=target_location,
+            target_object=target_object,
+            max_distance=max_distance,
+            max_hits=max_hits,
+        )
+        result = await bridge.send_request("raycast_from_camera", params.model_dump())
+        if not result.get("success"):
+            raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "raycast_from_camera failed"))
+        return result
+
+    return configure_camera, camera_look_at, frame_objects, raycast_from_camera

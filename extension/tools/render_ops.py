@@ -3,6 +3,7 @@ import os
 import tempfile
 import time
 import bpy
+import numpy as np
 
 from .base import ToolBase
 
@@ -16,6 +17,15 @@ from .base import ToolBase
 # measured; override with force=true for a deliberate final-quality render.
 _MAX_RESOLUTION_PX = 8192
 _MAX_SAMPLES = 4096
+
+# sample_render_pixels' fallback when no image_path is given. Deliberately not
+# the in-memory "Render Result" datablock: in background/headless Blender
+# (the common way this bridge itself gets driven) Render Result's .size can
+# read back as 0x0 even right after a successful render, since there's no
+# display/window holding its pixel buffer live. render_scene always writes a
+# file -- even to a throwaway temp path when output_path isn't given -- so
+# tracking that path is a strictly more reliable "last render" reference.
+_last_render_output_path = None
 
 
 def _set_render_engine(scene, engine: str):
@@ -115,6 +125,10 @@ class RenderSceneTool(ToolBase):
         actual_path = output_path
         if not os.path.exists(actual_path) and os.path.exists(output_path + ".png"):
             actual_path = output_path + ".png"
+
+        if not is_animation and os.path.exists(actual_path):
+            global _last_render_output_path
+            _last_render_output_path = actual_path
 
         image_base64 = None
         if params.get("return_image_base64", False) and os.path.exists(actual_path):
@@ -222,3 +236,74 @@ class SetRenderSettingsTool(ToolBase):
             "film_transparent": scene.render.film_transparent,
             "view_transform": scene.view_settings.view_transform,
         }
+
+
+class SampleRenderPixelsTool(ToolBase):
+    name = "sample_render_pixels"
+    description = (
+        "Sample pixel colors from a rendered image over a region, to confirm what "
+        "actually reached the render output (e.g. verify a material's color shows "
+        "up, or that an object isn't occluded) without decoding a full base64 image."
+    )
+
+    def execute(self, params: dict) -> dict:
+        x = int(params.get("x", 0))
+        y = int(params.get("y", 0))
+        width = max(1, int(params.get("width", 1)))
+        height = max(1, int(params.get("height", 1)))
+        image_path = params.get("image_path")
+
+        if not image_path and _last_render_output_path and os.path.exists(_last_render_output_path):
+            image_path = _last_render_output_path
+
+        loaded_image = None
+        if image_path:
+            if not os.path.exists(image_path):
+                return {"success": False, "message": f"Image not found: {image_path}"}
+            # check_existing=False: always a fresh, disposable datablock read
+            # straight off disk. check_existing=True would instead hand back
+            # whatever bpy.data.images entry already has this filepath (stale
+            # pixels if that path was rendered to more than once), and this
+            # tool unconditionally removes what it loads once done -- doing
+            # that to a datablock it didn't create would be a spooky-action
+            # side effect on whatever else in the scene was using it.
+            image = bpy.data.images.load(image_path, check_existing=False)
+            loaded_image = image
+        else:
+            image = bpy.data.images.get("Render Result")
+            if image is None or image.size[0] == 0 or image.size[1] == 0:
+                return {
+                    "success": False,
+                    "message": "No renderable image available -- call render_scene first, or pass image_path.",
+                }
+
+        try:
+            img_w, img_h = image.size
+            if img_w == 0 or img_h == 0:
+                return {"success": False, "message": "Image has no pixel data (0x0) -- render may not have completed."}
+            if x < 0 or y < 0 or x + width > img_w or y + height > img_h:
+                return {
+                    "success": False,
+                    "message": f"Region (x={x}, y={y}, {width}x{height}) is outside image bounds {img_w}x{img_h}.",
+                }
+
+            # foreach_get + numpy rather than list(image.pixels): the latter
+            # copies the entire image (millions of floats for a normal render)
+            # into a Python list just to read a small region.
+            flat = np.empty(img_w * img_h * 4, dtype=np.float32)
+            image.pixels.foreach_get(flat)
+            pixels = flat.reshape(img_h, img_w, 4)
+            region = pixels[y : y + height, x : x + width]
+
+            avg = region.reshape(-1, 4).mean(axis=0)
+
+            return {
+                "success": True,
+                "image_size": [img_w, img_h],
+                "region": [x, y, width, height],
+                "average_rgba": [round(float(c), 4) for c in avg],
+                "note": "Origin (0,0) is bottom-left, matching Blender's own pixel/image convention.",
+            }
+        finally:
+            if loaded_image is not None:
+                bpy.data.images.remove(loaded_image)

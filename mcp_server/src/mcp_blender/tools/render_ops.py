@@ -28,6 +28,14 @@ class GetViewportScreenshotParams(BaseModel):
     return_image_base64: bool = True
 
 
+class SampleRenderPixelsParams(BaseModel):
+    x: int = 0
+    y: int = 0
+    width: int = 1
+    height: int = 1
+    image_path: Optional[str] = None
+
+
 class SetRenderSettingsParams(BaseModel):
     engine: Optional[RenderEngineType] = None
     resolution_x: Optional[int] = None
@@ -126,4 +134,23 @@ def register_render_tools(mcp: FastMCP, bridge: BlenderBridge):
             raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "set_render_settings failed"))
         return result
 
-    return render_scene, get_viewport_screenshot, set_render_settings
+    @mcp.tool(
+        name="sample_render_pixels",
+        description="Sample the average RGBA color over a region of the last render (or a saved PNG via image_path), "
+        "to confirm what actually reached the render output -- e.g. verify a material's color shows up, or that an "
+        "object isn't occluded -- without decoding a full base64 image. Origin (0,0) is bottom-left.",
+    )
+    async def sample_render_pixels(
+        x: int = 0,
+        y: int = 0,
+        width: int = 1,
+        height: int = 1,
+        image_path: Optional[str] = None,
+    ) -> dict:
+        params = SampleRenderPixelsParams(x=x, y=y, width=width, height=height, image_path=image_path)
+        result = await bridge.send_request("sample_render_pixels", params.model_dump())
+        if not result.get("success"):
+            raise BridgeError(ErrorType.TOOL_EXECUTION, result.get("message", "sample_render_pixels failed"))
+        return result
+
+    return render_scene, get_viewport_screenshot, set_render_settings, sample_render_pixels

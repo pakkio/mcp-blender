@@ -58,7 +58,8 @@ class BlenderCameraLightingParams(BaseModel):
         "screenshot",
         "evaluate_scene",
         "compositor_effects",
-    ] = Field(description="Camera positioning, studio/sun lighting rigs, and viewport screenshot capture")
+        "raycast",
+    ] = Field(description="Camera positioning, studio/sun lighting rigs, viewport screenshot capture, and camera-to-target occlusion raycasting")
     params: dict[str, Any] = Field(default_factory=dict, description="Action arguments (e.g. target_objects=['Cube'], margin=1.3, energy=1000.0)")
 
 
@@ -82,7 +83,8 @@ class BlenderRenderPipelineParams(BaseModel):
         "generate_lods",
         "vfx_tracking",
         "vfx_shadow_catcher",
-    ] = Field(description="Render, texture baking, game engine export, and VFX tracking operations")
+        "sample_pixels",
+    ] = Field(description="Render, texture baking, game engine export, VFX tracking, and render-output pixel inspection operations")
     params: dict[str, Any] = Field(default_factory=dict, description="Action arguments (e.g. output_path='render.png', resolution=2048, ratios=[1.0, 0.5])")
 
 
@@ -544,6 +546,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "screenshot",
             "evaluate_scene",
             "compositor_effects",
+            "raycast",
         ],
         params: Optional[dict[str, Any]] = None,
     ) -> dict:
@@ -563,6 +566,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "sun_sky_rig": "setup_sky_sun_rig",
             "screenshot": "get_viewport_screenshot",
             "compositor_effects": "configure_compositor_effects",
+            "raycast": "raycast_from_camera",
         }
         method = method_map.get(action, action)
         timeout = HEAVY_REQUEST_TIMEOUT_S if action == "screenshot" else None
@@ -609,6 +613,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "generate_lods",
             "vfx_tracking",
             "vfx_shadow_catcher",
+            "sample_pixels",
         ],
         params: Optional[dict[str, Any]] = None,
     ) -> dict:
@@ -621,6 +626,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "generate_lods": "generate_lods",
             "vfx_tracking": "setup_camera_tracking",
             "vfx_shadow_catcher": "setup_vfx_shadow_catcher",
+            "sample_pixels": "sample_render_pixels",
         }
         method = method_map.get(action, action)
         timeout = HEAVY_REQUEST_TIMEOUT_S if action in ("render_image", "render_anim", "bake_textures", "export_unity_fbx", "generate_lods") else None

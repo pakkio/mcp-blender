@@ -181,3 +181,83 @@ class FrameObjectsTool(ToolBase):
             "target_center": [round(v, 4) for v in center],
             "distance": round(distance, 4),
         }
+
+
+class RaycastFromCameraTool(ToolBase):
+    name = "raycast_from_camera"
+    description = (
+        "Cast a ray from a camera toward a target point/object (or straight ahead "
+        "down the camera's view direction) and list every object hit along the "
+        "way, in order, with distances -- answers 'what's actually between the "
+        "camera and my target' in one call instead of a hide/render/diff loop."
+    )
+
+    def execute(self, params: dict) -> dict:
+        camera_name = params.get("camera_name")
+        cam_obj = bpy.data.objects.get(camera_name) if camera_name else bpy.context.scene.camera
+        if not cam_obj or cam_obj.type != "CAMERA":
+            return {
+                "success": False,
+                "message": "Valid camera not found (pass camera_name, or set an active scene camera).",
+            }
+
+        origin = cam_obj.matrix_world.translation.copy()
+
+        target_pos = None
+        target_object_name = params.get("target_object")
+        if target_object_name:
+            target_obj = bpy.data.objects.get(target_object_name)
+            if not target_obj:
+                return {"success": False, "message": f"Object '{target_object_name}' not found"}
+            target_pos = target_obj.matrix_world.translation.copy()
+        elif params.get("target_location") is not None:
+            target_pos = mathutils.Vector(params["target_location"])
+
+        max_distance_param = params.get("max_distance")
+
+        if target_pos is not None:
+            direction = target_pos - origin
+            dist_to_target = direction.length
+            if dist_to_target < 1e-6:
+                return {"success": False, "message": "Target location coincides with the camera origin."}
+            direction.normalize()
+            max_distance = float(max_distance_param) if max_distance_param is not None else dist_to_target + 1e-4
+        else:
+            direction = (cam_obj.matrix_world.to_3x3() @ mathutils.Vector((0.0, 0.0, -1.0))).normalized()
+            max_distance = float(max_distance_param) if max_distance_param is not None else 1000.0
+
+        max_hits = int(params.get("max_hits", 10))
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+
+        hits = []
+        current_origin = origin
+        traveled = 0.0
+        epsilon = 1e-4
+        for _ in range(max_hits):
+            remaining = max_distance - traveled
+            if remaining <= 0:
+                break
+            success, location, normal, index, hit_obj, matrix = bpy.context.scene.ray_cast(
+                depsgraph, current_origin, direction, distance=remaining
+            )
+            if not success:
+                break
+            distance = (location - origin).length
+            hits.append(
+                {
+                    "name": hit_obj.name,
+                    "distance": round(distance, 4),
+                    "location": [round(v, 4) for v in location],
+                }
+            )
+            current_origin = location + direction * epsilon
+            traveled = distance + epsilon
+
+        return {
+            "success": True,
+            "camera_name": cam_obj.name,
+            "origin": [round(v, 4) for v in origin],
+            "direction": [round(v, 4) for v in direction],
+            "hits": hits,
+            "hit_count": len(hits),
+        }
