@@ -1,4 +1,4 @@
-# mcp-blender (v2.1.3)
+# mcp-blender (v2.1.4)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender` (v2.1.3) |
+| Capability | Generic Blender MCPs | `mcp-blender` (v2.1.4) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **144 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -267,7 +267,7 @@ The same force-redrawn HUD pattern from item 30 was extended to the other viewpo
 - The full downstream pipeline is reused: auto-decimation to `target_vertices`, orientation report, preview capture, collection sorting. Tripo's status polling was also fixed -- it previously checked task state exactly once and failed on any real generation.
 - **Viewport panel (2.1.3)**: the "AI Generate 3D Model..." dialog has an Input switch (Text Prompt / Image). In Image mode a **Paste from Clipboard** button fills the field from whatever is on the clipboard -- a copied image file, an image path copied as text, or a raw screenshot bitmap (Windows CF_DIB, converted to a temp PNG via Blender's image loader) -- and a live preview of the referenced image is drawn right in the dialog. Generation still runs on a background thread with live header status.
 
-### 33. Render/Occlusion Diagnostics (unreleased)
+### 33. Render/Occlusion Diagnostics (v2.1.4)
 Diagnosing "why isn't this object showing up in the render" previously meant a manual hide/render/diff loop -- toggle visibility, re-render, eyeball the image, repeat. Two tools replace that:
 
 - **`sample_render_pixels`**: average RGBA over a region of the last render (or a saved PNG via `image_path`), to confirm a material's color actually reached the render output without decoding a full base64 image. Reads the file `render_scene` actually wrote rather than the in-memory `"Render Result"` datablock, which reports 0x0 size in headless/background Blender right after a real render.
@@ -292,11 +292,11 @@ The unified `.env` loader (v2.0.17) reads these. Each is only needed for the pro
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge-2.1.3.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge-2.1.4.zip
 ```
 
 3. In Blender 4.2+, open **Preferences > Get Extensions > Install from Disk...**,
-   select `dist/mcp_bridge-2.1.3.zip`, and enable **MCP Bridge**.
+   select `dist/mcp_bridge-2.1.4.zip`, and enable **MCP Bridge**.
 
 ### 2. Install the MCP Server
 
