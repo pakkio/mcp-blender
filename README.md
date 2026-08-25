@@ -24,7 +24,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 | Capability | Generic Blender MCPs | `mcp-blender` (v2.1.3) |
 | :--- | :--- | :--- |
-| **Total Tool Count** | ~5 to 15 basic tools | **142 Native Tools / 10 Unified Low-Context Domain Facades** |
+| **Total Tool Count** | ~5 to 15 basic tools | **144 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
 | **Architecture** | Legacy Blender 2.8/3.x zip addons | **Blender 4.2+ & 5.2+ Native Extension System** |
 | **Transactional Safety** | ❌ None (scene corrupts on fail) | **`execute_batch` (with automatic snapshot rollback on failure)** + **`create_scene_checkpoint`** / **`restore_scene_checkpoint`** |
@@ -76,7 +76,7 @@ Four tools stay standalone even in this low-context mode rather than folding int
 
 ---
 
-## 🛠️ Complete Tool Catalog (142 Tools across 21 Domains)
+## 🛠️ Complete Tool Catalog (144 Tools across 21 Domains)
 
 ### 1. Batch Execution & Non-Modal Progress HUD
 - **`execute_batch`**: Single-roundtrip multi-tool pipeline execution with stop-on-error/optional-step control and per-step output logging.
@@ -162,7 +162,7 @@ Four tools stay standalone even in this low-context mode rather than folding int
 - **`uv_unwrap`**, **`import_image_as_plane`**, **`project_image_texture`**, **`setup_pbr_materials`**, **`create_procedural_material`**, **`bake_textures`**, **`create_armature`**, **`pose_bone`**, **`manage_shape_keys`**, **`add_constraint`**.
 
 ### 18. Game Engine Pipelines & System Management
-- **`export_unity_fbx`**, **`export_scene`**, **`generate_lods`**, **`import_file`**, **`manage_addons`**, **`inspect_addon`**, **`bake_advanced`**, **`configure_light_probe`**, **`purge_orphans_and_cleanup`**, **`manipulate_origin_cursor`**, **`align_distribute_objects`**, **`configure_preferences`**, **`get_system_info`**, **`configure_world_environment`**, **`configure_scene_physics`**, **`switch_workspace`**, **`get_scene_info`**, **`get_object_info`**, **`select_objects`**, **`delete_object`**, **`duplicate_object`**, **`parent_objects`**, **`unparent_objects`**, **`manage_collection`**, **`configure_camera`**, **`camera_look_at`**, **`frame_objects`**, **`configure_light`**, **`render_scene`**, **`get_viewport_screenshot`**, **`set_render_settings`**, **`execute_blender_python`**.
+- **`export_unity_fbx`**, **`export_scene`**, **`generate_lods`**, **`import_file`**, **`manage_addons`**, **`inspect_addon`**, **`bake_advanced`**, **`configure_light_probe`**, **`purge_orphans_and_cleanup`**, **`manipulate_origin_cursor`**, **`align_distribute_objects`**, **`configure_preferences`**, **`get_system_info`**, **`configure_world_environment`**, **`configure_scene_physics`**, **`switch_workspace`**, **`get_scene_info`**, **`get_object_info`**, **`select_objects`**, **`delete_object`**, **`duplicate_object`**, **`parent_objects`**, **`unparent_objects`**, **`manage_collection`**, **`configure_camera`**, **`camera_look_at`**, **`frame_objects`**, **`configure_light`**, **`render_scene`**, **`get_viewport_screenshot`**, **`set_render_settings`**, **`sample_render_pixels`**, **`raycast_from_camera`**, **`execute_blender_python`**.
 
 ### 19. Online Asset Sourcing, Semantic Grouping & Vision Fallback
 - **`search_online_assets`**: Search free/CC0 asset libraries -- Poly Haven and ambientCG need no API key; Sketchfab search is keyless too (download needs a token). Use before hand-modelling any recognisable real-world object.
@@ -266,6 +266,12 @@ The same force-redrawn HUD pattern from item 30 was extended to the other viewpo
 - Asset ids are content-hash derived (`<provider>_img_<sha8>`), so regenerating from the same picture is served from the local cache instead of re-paying for generation.
 - The full downstream pipeline is reused: auto-decimation to `target_vertices`, orientation report, preview capture, collection sorting. Tripo's status polling was also fixed -- it previously checked task state exactly once and failed on any real generation.
 - **Viewport panel (2.1.3)**: the "AI Generate 3D Model..." dialog has an Input switch (Text Prompt / Image). In Image mode a **Paste from Clipboard** button fills the field from whatever is on the clipboard -- a copied image file, an image path copied as text, or a raw screenshot bitmap (Windows CF_DIB, converted to a temp PNG via Blender's image loader) -- and a live preview of the referenced image is drawn right in the dialog. Generation still runs on a background thread with live header status.
+
+### 33. Render/Occlusion Diagnostics (unreleased)
+Diagnosing "why isn't this object showing up in the render" previously meant a manual hide/render/diff loop -- toggle visibility, re-render, eyeball the image, repeat. Two tools replace that:
+
+- **`sample_render_pixels`**: average RGBA over a region of the last render (or a saved PNG via `image_path`), to confirm a material's color actually reached the render output without decoding a full base64 image. Reads the file `render_scene` actually wrote rather than the in-memory `"Render Result"` datablock, which reports 0x0 size in headless/background Blender right after a real render.
+- **`raycast_from_camera`**: casts a ray from a camera toward a target point/object (or straight ahead) and lists every object hit along the way, in order, with distances -- answers "what's actually between the camera and my target" in one call instead of hide/render/diff.
 
 ### Required credentials
 The unified `.env` loader (v2.0.17) reads these. Each is only needed for the provider you actually use:
