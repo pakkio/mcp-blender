@@ -47,6 +47,17 @@ def tick_statusbar_redraw() -> float:
     genuinely free the whole time, so this ticks the "running for Xs"
     display live.
     """
+    # Watchdog for the cursor tracker (feeds the progress badge next to the
+    # mouse): a file load kills modal operators silently, so re-ensure it
+    # here every second -- two bool checks when healthy. Local import: this
+    # runs on a timer from addon register, before anything else may exist.
+    try:
+        from ..tools.progress_hud_ops import ensure_cursor_tracker
+
+        ensure_cursor_tracker()
+    except Exception:
+        pass
+
     status = dispatch.get_status()
     text, icon = status_text_and_icon()
     # Only override the viewport header while there's something to say --

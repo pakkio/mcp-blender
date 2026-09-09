@@ -1,4 +1,4 @@
-# mcp-blender (v2.1.4)
+# mcp-blender (v2.1.5)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,7 +22,7 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender` (v2.1.4) |
+| Capability | Generic Blender MCPs | `mcp-blender` (v2.1.5) |
 | :--- | :--- | :--- |
 | **Total Tool Count** | ~5 to 15 basic tools | **144 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
@@ -292,11 +292,11 @@ The unified `.env` loader (v2.0.17) reads these. Each is only needed for the pro
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge-2.1.4.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge-2.1.5.zip
 ```
 
 3. In Blender 4.2+, open **Preferences > Get Extensions > Install from Disk...**,
-   select `dist/mcp_bridge-2.1.4.zip`, and enable **MCP Bridge**.
+   select `dist/mcp_bridge-2.1.5.zip`, and enable **MCP Bridge**.
 
 ### 2. Install the MCP Server
 
@@ -307,19 +307,27 @@ pip install -e .
 
 ### 3. (Optional) Configure API keys
 
-You can place your `.env` file in either of these locations:
-* **Globally (Recommended):** At `~/.mcp-blender/.env` (shared automatically by both the addon and the server).
-* **Locally:** In the current working directory from which you run the server.
+No file editing required -- pick whichever suits you:
+
+* **Blender form (easiest):** open **Edit > Preferences > Add-ons > MCP Bridge** and fill in
+  the **API Keys** section, then click **Save API Keys**. Applies instantly in Blender;
+  restart the MCP server process so it picks them up too.
+* **MCP tool:** call `set_api_keys` (e.g. `set_api_keys(OPENROUTER_API_KEY="sk-...")`) --
+  applies instantly to the server, live-propagates to Blender when connected, and persists
+  to `~/.mcp-blender/.env`. Verify with `get_env_info` (values are masked, never echoed back).
+* **`.env` file (manual alternative):** place it at `~/.mcp-blender/.env` (shared automatically
+  by both the addon and the server) or in the working directory you launch the server from:
 
 ```bash
 # Example for local setup:
 cp .env.example .env
 ```
 
-Fill in `SKETCHFAB_API_TOKEN` (free account, needed only to *download* Sketchfab models --
-search works without it) and/or `OPENROUTER_API_KEY` (powers `evaluate_scene_visually`, a
-cheap-VLM scene critique for hosts that can't see image content directly). Both are optional;
-tools that need a missing key degrade to an actionable message instead of failing.
+`SKETCHFAB_API_TOKEN` (free account, needed only to *download* Sketchfab models --
+search works without it) and `OPENROUTER_API_KEY` (powers `evaluate_scene_visually`, a
+cheap-VLM scene critique for hosts that can't see image content directly) are the common
+ones. All keys are optional; tools that need a missing key degrade to an actionable
+message instead of failing.
 
 ### 4. Add to your MCP Client Configuration
 

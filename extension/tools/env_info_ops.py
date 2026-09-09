@@ -126,3 +126,40 @@ class GetEnvInfoTool(ToolBase):
 
     def execute(self, params: dict) -> dict:
         return collect_env_info()
+
+
+class SetApiKeysTool(ToolBase):
+    name = "set_api_keys"
+    description = (
+        "Set API keys on this Blender process without hand-editing a .env file. "
+        "Only keys present in params are changed (absent = leave unchanged, "
+        "empty string = clear). Persists to ~/.mcp-blender/.env and applies "
+        "to os.environ immediately. Returns masked verification, never full secrets."
+    )
+
+    def execute(self, params: dict) -> dict:
+        from ..config import MANAGED_KEYS, save_managed_keys
+
+        updates = {k: params[k] for k in MANAGED_KEYS if k in params and params[k] is not None}
+        if not updates:
+            return {
+                "success": False,
+                "message": "No keys provided -- pass at least one managed key (empty string clears it).",
+                "info": collect_env_info(),
+            }
+        # Coerce everything to str (bridge JSON may carry numbers/bools).
+        updates = {k: ("" if v is None else str(v)) for k, v in updates.items()}
+        try:
+            path = save_managed_keys(updates)
+        except OSError as exc:
+            return {"success": False, "message": f"Could not write .env: {exc}"}
+        changed = sorted(updates)
+        cleared = sorted(k for k, v in updates.items() if not v)
+        return {
+            "success": True,
+            "message": f"Updated {len(changed)} key(s) in {path}: " + ", ".join(changed),
+            "updated": changed,
+            "cleared": cleared,
+            "env_file": str(path),
+            "info": collect_env_info(),
+        }

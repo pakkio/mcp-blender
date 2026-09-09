@@ -19,9 +19,90 @@ HUD_STATE = {
     "auto_hide_time": 0.0,
     "completed_summary": "",
     "next_steps": [],
+    # Cursor-following badge (small "% - what" pill drawn next to the mouse
+    # while a blocking run holds the WAIT cursor -- the user stares at the
+    # cursor, not the top-right card, during a long simplify).
+    "cursor_badge": False,
+    "badge_text": "",
 }
 
 _DRAW_HANDLER = None
+
+# Last-known mouse position, window coordinates (origin bottom-left, matching
+# event.mouse_x/mouse_y). Written by MCP_OT_track_cursor on every mouse move;
+# read by the badge painter to anchor itself next to the cursor. t == 0 means
+# "never recorded" (tracker couldn't start, e.g. background mode) and the
+# badge stays hidden -- the card still shows progress.
+CURSOR_STATE = {"x": 0, "y": 0, "window_ptr": 0, "t": 0.0}
+
+# Tracker lifecycle: WANT is set at addon register and cleared at unregister;
+# RUNNING tracks the live modal operator. A file load kills modal operators
+# silently, so the statusbar tick re-runs ensure_cursor_tracker() (which
+# no-ops while RUNNING) and a load_post handler resets RUNNING to force it.
+TRACKER_WANT = False
+_TRACKER_RUNNING = False
+
+
+def record_cursor(x, y, window_ptr) -> None:
+    CURSOR_STATE["x"] = int(x)
+    CURSOR_STATE["y"] = int(y)
+    CURSOR_STATE["window_ptr"] = int(window_ptr or 0)
+    CURSOR_STATE["t"] = time.time()
+
+
+class MCP_OT_track_cursor(bpy.types.Operator):
+    """Internal: remember the mouse position for the progress badge.
+
+    Pure observer -- PASS_THROUGH on every event, so it never steals input.
+    """
+
+    bl_idname = "mcp_bridge.track_cursor"
+    bl_label = "Track Cursor for Progress Badge"
+    bl_options = {"INTERNAL"}
+
+    def invoke(self, context, event):
+        global _TRACKER_RUNNING
+        _TRACKER_RUNNING = True
+        context.window_manager.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        global _TRACKER_RUNNING
+        if not TRACKER_WANT:
+            _TRACKER_RUNNING = False
+            return {"CANCELLED"}
+        if event.type in {"MOUSEMOVE", "INBETWEEN_MOUSEMOVE"}:
+            try:
+                record_cursor(event.mouse_x, event.mouse_y, context.window.as_pointer())
+            except Exception:
+                pass
+        return {"PASS_THROUGH"}
+
+    def cancel(self, context):
+        global _TRACKER_RUNNING
+        _TRACKER_RUNNING = False
+
+
+def ensure_cursor_tracker() -> bool:
+    """Start the cursor tracker if wanted and not already running.
+
+    Safe to call every second (the statusbar tick does): two bool checks
+    when healthy, one guarded operator invoke after a file load killed it.
+    """
+    if not TRACKER_WANT or _TRACKER_RUNNING or bpy.app.background:
+        return _TRACKER_RUNNING
+    try:
+        bpy.ops.mcp_bridge.track_cursor("INVOKE_DEFAULT")
+        return True
+    except Exception:
+        return False
+
+
+def _on_file_loaded(_dummy) -> None:
+    """load_post handler: file loads silently kill modal operators, so drop
+    the flag and let the next statusbar tick restart the tracker."""
+    global _TRACKER_RUNNING
+    _TRACKER_RUNNING = False
 
 
 def _get_builtin_shader(name_2d, name_legacy):
@@ -31,6 +112,82 @@ def _get_builtin_shader(name_2d, name_legacy):
         except Exception:
             return gpu.shader.from_builtin(name_legacy)
     return None
+
+
+def _draw_box(shader, x0, y0, x1, y1, color) -> None:
+    """Filled 2D rect with the already-resolved builtin shader (same call
+    pattern as the card below, so any Blender-version shader quirk that
+    breaks one breaks both -- no silent second code path)."""
+    verts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+    batch = batch_for_shader(shader, "TRIS", {"pos": verts}, indices=[(0, 1, 2), (2, 3, 0)])
+    shader.bind()
+    shader.uniform_float("color", color)
+    batch.draw(shader)
+
+
+def _badge_rect(region_w, region_h, area_x, area_y, mx, my, box_w, box_h):
+    """Top-left-anchored badge rect next to the cursor, pure math (no bpy).
+
+    Returns (x0, y0) or None when the cursor is outside this region (another
+    region or window) so the caller simply skips painting there.
+    """
+    lx, ly = mx - area_x, my - area_y
+    if not (-50 <= lx <= region_w + 50 and -50 <= ly <= region_h + 50):
+        return None
+    box_w = min(box_w, max(40, region_w - 8))
+    x0 = lx + 18
+    if x0 + box_w > region_w - 4:
+        x0 = lx - 18 - box_w  # flip to the left of the cursor
+    y0 = ly - 14 - box_h
+    x0 = max(4, min(x0, region_w - box_w - 4))
+    y0 = max(4, min(y0, region_h - box_h - 4))
+    return (x0, y0)
+
+
+def _draw_cursor_badge(shader) -> None:
+    """Small "% - what" pill at the last-known mouse position."""
+    area = bpy.context.area
+    if not area or CURSOR_STATE["t"] <= 0:
+        return
+    if CURSOR_STATE["window_ptr"]:
+        try:
+            if bpy.context.window.as_pointer() != CURSOR_STATE["window_ptr"]:
+                return  # badge belongs to another window
+        except Exception:
+            pass
+
+    pct = max(0, min(100, int(round(HUD_STATE["progress"]))))
+    hint = HUD_STATE.get("badge_text") or HUD_STATE.get("status") or ""
+    text = "%d%% - %s" % (pct, hint)
+
+    font_id = 0
+    blf.size(font_id, 12)
+    text_w, text_h = blf.dimensions(font_id, text)
+    pad, bar_w, bar_h = 8, 110, 6
+    box_w = max(text_w, bar_w) + pad * 2
+    box_h = text_h + bar_h + pad * 2 + 4
+
+    pos = _badge_rect(area.width, area.height, area.x, area.y, CURSOR_STATE["x"], CURSOR_STATE["y"], box_w, box_h)
+    if pos is None:
+        return
+    x0, y0 = pos
+
+    gpu.state.blend_set("ALPHA")
+    _draw_box(shader, x0, y0, x0 + box_w, y0 + box_h, (0.08, 0.09, 0.12, 0.93))
+    # Mini bar under the text, same cyan->emerald ramp as the card.
+    fill = bar_w * pct / 100.0
+    _draw_box(shader, x0 + pad, y0 + pad, x0 + pad + bar_w, y0 + pad + bar_h, (0.18, 0.2, 0.25, 0.95))
+    if fill > 0:
+        _draw_box(
+            shader,
+            x0 + pad, y0 + pad, x0 + pad + fill, y0 + pad + bar_h,
+            (0.0, 0.8 + 0.2 * pct / 100.0, 1.0 - 0.5 * pct / 100.0, 1.0),
+        )
+    gpu.state.blend_set("NONE")
+
+    blf.color(font_id, 1.0, 1.0, 1.0, 1.0)
+    blf.position(font_id, x0 + pad, y0 + pad + bar_h + 4, 0)
+    blf.draw(font_id, text)
 
 
 def _draw_hud_callback():
@@ -165,6 +322,14 @@ def _draw_hud_callback():
             blf.draw(font_id, f"→ {step[:42]}")
             y_cursor -= 16
 
+    # Cursor badge: "% - what" pill next to the mouse, for blocking runs
+    # where the user stares at the hourglass instead of this card.
+    if HUD_STATE.get("cursor_badge"):
+        try:
+            _draw_cursor_badge(shader)
+        except Exception:
+            pass  # draw callbacks must never raise into Blender's draw loop
+
 
 def _ensure_draw_handler():
     global _DRAW_HANDLER
@@ -195,6 +360,8 @@ def push_hud_update(
     show_hud: bool = True,
     auto_hide_seconds: float = 0.0,
     force_redraw: bool = False,
+    cursor_badge=None,
+    badge_text: str = "",
 ) -> None:
     """Direct (non-JSON-tool) entry point other extension modules call to
     drive the floating HUD from inside their own long-running loops.
@@ -221,6 +388,13 @@ def push_hud_update(
     HUD_STATE["step_total"] = step_total
     HUD_STATE["last_update"] = time.time()
     HUD_STATE["completed_summary"] = completed_summary
+    # Badge follows the card: callers that don't mention it (None) never
+    # disturb it, so an outer flow's plain push can't kill a badge an inner
+    # run just raised. ASCII-only text -- the default BLF font has no emoji.
+    if cursor_badge is not None or not show_hud:
+        HUD_STATE["cursor_badge"] = bool(cursor_badge) and bool(show_hud)
+    if badge_text:
+        HUD_STATE["badge_text"] = "".join(c if ord(c) < 128 else "?" for c in badge_text)[:64]
 
     if isinstance(next_steps, list):
         HUD_STATE["next_steps"] = next_steps
@@ -303,6 +477,8 @@ class ClearProgressHUDTool(ToolBase):
         HUD_STATE["progress"] = 0.0
         HUD_STATE["completed_summary"] = ""
         HUD_STATE["next_steps"] = []
+        HUD_STATE["cursor_badge"] = False
+        HUD_STATE["badge_text"] = ""
 
         for window in bpy.context.window_manager.windows:
             for area in window.screen.areas:

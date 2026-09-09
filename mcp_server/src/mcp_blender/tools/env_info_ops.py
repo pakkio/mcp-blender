@@ -134,4 +134,76 @@ def register_env_info_tools(mcp: FastMCP, bridge: BlenderBridge):
     async def get_env_info() -> dict:
         return collect_env_info()
 
-    return (get_env_info,)
+    @mcp.tool(
+        name="set_api_keys",
+        description=(
+            "Set API keys without hand-editing a .env file. Pass only the keys you want to change "
+            "(None/omitted = leave unchanged, empty string = clear). Applies immediately to this "
+            "server process AND persists to ~/.mcp-blender/.env so Blender and future server "
+            "restarts see them. Returns the masked get_env_info verification (never echo back "
+            "full secrets). Keys: SKETCHFAB_API_TOKEN (Sketchfab downloads), OPENROUTER_API_KEY "
+            "(LLM/vision), MESHY_API_KEY, TRIPO_API_KEY, TRELLIS_API_KEY / HF_TOKEN + "
+            "TRELLIS_ENDPOINT_URL (AI 3D generation), OPENROUTER_VISION_MODEL (vision override)."
+        ),
+    )
+    async def set_api_keys(
+        SKETCHFAB_API_TOKEN: str | None = None,
+        OPENROUTER_API_KEY: str | None = None,
+        MESHY_API_KEY: str | None = None,
+        TRIPO_API_KEY: str | None = None,
+        TRELLIS_API_KEY: str | None = None,
+        HF_TOKEN: str | None = None,
+        OPENROUTER_VISION_MODEL: str | None = None,
+        TRELLIS_ENDPOINT_URL: str | None = None,
+    ) -> dict:
+        from ..config import MANAGED_KEYS, save_env_keys
+
+        given = {
+            "SKETCHFAB_API_TOKEN": SKETCHFAB_API_TOKEN,
+            "OPENROUTER_API_KEY": OPENROUTER_API_KEY,
+            "MESHY_API_KEY": MESHY_API_KEY,
+            "TRIPO_API_KEY": TRIPO_API_KEY,
+            "TRELLIS_API_KEY": TRELLIS_API_KEY,
+            "HF_TOKEN": HF_TOKEN,
+            "OPENROUTER_VISION_MODEL": OPENROUTER_VISION_MODEL,
+            "TRELLIS_ENDPOINT_URL": TRELLIS_ENDPOINT_URL,
+        }
+        updates = {k: v for k, v in given.items() if v is not None and k in MANAGED_KEYS}
+        if not updates:
+            return {
+                "success": False,
+                "message": "No keys provided -- pass at least one key to set (empty string clears it).",
+                "info": collect_env_info(),
+            }
+        try:
+            path = save_env_keys(updates)
+        except OSError as exc:
+            return {"success": False, "message": f"Could not write .env: {exc}"}
+        # Best-effort live propagation to the Blender process: its tools read
+        # os.environ (already loaded), so a file change alone would not take
+        # effect there until restart. Failure just means Blender is offline --
+        # the file persists and applies on its next .env load.
+        blender_note = "Blender was offline; keys apply there on its next start."
+        try:
+            await bridge.send_request("set_api_keys", updates)
+            blender_note = "Blender updated live too."
+        except Exception:
+            pass
+        changed = sorted(updates)
+        cleared = sorted(k for k, v in updates.items() if not v)
+        return {
+            "success": True,
+            "message": (
+                f"Updated {len(changed)} key(s) in {path}: "
+                + ", ".join(changed)
+                + (f" (cleared: {', '.join(cleared)})" if cleared else "")
+                + f". Applies to this server now. {blender_note}"
+            ),
+            "updated": changed,
+            "cleared": cleared,
+            "env_file": str(path),
+            "blender_live": blender_note.startswith("Blender updated"),
+            "info": collect_env_info(),
+        }
+
+    return (get_env_info, set_api_keys)

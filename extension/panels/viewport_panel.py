@@ -1002,6 +1002,10 @@ class MCP_OT_show_env_info(bpy.types.Operator):
                 sub.label(text=source_text)
 
         layout.separator()
+        layout.label(
+            text="Tip: set keys in Edit > Preferences > Add-ons > MCP Bridge > API Keys.",
+            icon="INFO",
+        )
         py = info.get("python", {})
         layout.label(
             text=f"venv: {py.get('venv_path', '')} (in_venv={py.get('in_venv')}, python {py.get('version', '')})",
@@ -1447,6 +1451,8 @@ class MCP_OT_simplify_mesh(bpy.types.Operator):
                     step_current=idx,
                     step_total=total_objs,
                     force_redraw=True,
+                    cursor_badge=True,
+                    badge_text=f"Mesh {idx} of {total_objs} - starting '{obj.name}'",
                 )
 
                 if self.simplifier_tool == "SIMPLIFY":

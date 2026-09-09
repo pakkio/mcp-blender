@@ -49,17 +49,51 @@ for mod_name in list(sys.modules.keys()):
 from . import config  # noqa: E402
 from .bridge import dispatch, start_server, stop_server  # noqa: E402
 from .panels import CLASSES, draw_bridge_status, tick_statusbar_redraw  # noqa: E402
+from .tools import progress_hud_ops  # noqa: E402
 from .tools.progress_hud_ops import remove_draw_handler  # noqa: E402
 
 
 _TIMER_REGISTERED = False
 
 
+def _kick_cursor_tracker():
+    """One-shot timer: start the cursor tracker (progress badge anchor) once
+    a window exists to host its modal operator. Returns a retry delay until
+    it sticks, then never reschedules. The statusbar tick keeps it alive
+    afterwards across file loads."""
+    try:
+        if progress_hud_ops.ensure_cursor_tracker():
+            return None
+    except Exception:
+        pass
+    return 0.5
+
+
 def register() -> None:
     global _TIMER_REGISTERED
 
+    # .env keys must be in os.environ before any tool reads them -- tools
+    # call load_env_vars() lazily too, but doing it here covers the prefs
+    # form's first draw as well.
+    try:
+        config.load_env_vars()
+    except Exception:
+        pass
+    try:
+        from .panels import preferences as _prefs_mod
+
+        _prefs_mod._API_KEYS_SYNCED = False
+    except Exception:
+        pass
+
     for cls in CLASSES:
         bpy.utils.register_class(cls)
+
+    progress_hud_ops.TRACKER_WANT = True
+    if progress_hud_ops._on_file_loaded not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(progress_hud_ops._on_file_loaded)
+    if not bpy.app.timers.is_registered(_kick_cursor_tracker):
+        bpy.app.timers.register(_kick_cursor_tracker, first_interval=0.5)
 
     dispatch.bump_generation()
 
@@ -77,6 +111,12 @@ def register() -> None:
 
 def unregister() -> None:
     global _TIMER_REGISTERED
+
+    progress_hud_ops.TRACKER_WANT = False
+    if progress_hud_ops._on_file_loaded in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(progress_hud_ops._on_file_loaded)
+    if bpy.app.timers.is_registered(_kick_cursor_tracker):
+        bpy.app.timers.unregister(_kick_cursor_tracker)
 
     dispatch.bump_generation()
     stop_server()
