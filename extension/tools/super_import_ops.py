@@ -28,6 +28,196 @@ _USER_AGENT = "Blender-MCP-Bridge/2.0"
 
 _POLYHAVEN_CACHE: dict[str, dict] = {}
 
+# Sort orders for online search (panel dropdown + search_all_online_models).
+# RELEVANCE keeps each provider's own relevance ranking (merged by downloads,
+# the historical behaviour). The rest re-sort the merged hits client-side;
+# Sketchfab additionally pushes DATE/POPULARITY/RATING server-side so its
+# pagination stays in the same order. LICENSE ranks most-open first:
+# CC0, then the CC-BY family, then other OSS licences, then unknown and
+# restrictive ones (editorial/standard/all-rights-reserved) last.
+SORT_OPTIONS = ("RELEVANCE", "POPULARITY", "DATE", "RATING", "VERTICES_DESC", "VERTICES_ASC", "DIMENSIONS", "LICENSE")
+
+
+def _license_rank(lic) -> int:
+    """Openness tier for a licence string (lower = more open)."""
+    text = str(lic or "").lower().replace("cc-0", "cc0")
+    if not text or text in ("unknown", "n/a", "none"):
+        return 3
+    if "cc0" in text or "public domain" in text or "cc-zero" in text:
+        return 0
+    if "cc" in text and "by" in text or "attribution" in text or "cc-by" in text:
+        return 1
+    oss_markers = ("mit", "apache", "bsd", "gpl", "lgpl", "mpl", "unlicense", "ofl",
+                   "open font", "artistic", "eclipse", "mozilla", "open source", "open-source")
+    if any(m in text for m in oss_markers):
+        return 2
+    restrictive = ("editorial", "standard", "all rights", "royalty", "commercial",
+                   "ed$", " st", "(st)", "(ed)")
+    if any(m in text for m in restrictive) or text.strip() in ("ed", "st"):
+        return 4
+    return 3
+
+
+def _parse_epoch(value) -> int:
+    """Epoch seconds from an int epoch or ISO-8601 string; 0 when unknown."""
+    if not value:
+        return 0
+    try:
+        if isinstance(value, (int, float)):
+            return int(value)
+        text = str(value).strip()
+        if text.isdigit():
+            return int(text)
+        from datetime import datetime, timezone
+
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return int(dt.replace(tzinfo=dt.tzinfo or timezone.utc).timestamp())
+    except Exception:
+        return 0
+
+
+def _dim_max(dimensions) -> float:
+    """Largest physical dimension from a PolyHaven-style [x, y(, z)] list."""
+    try:
+        vals = [float(v) for v in (dimensions or [])]
+        return max(vals) if vals else 0.0
+    except Exception:
+        return 0.0
+
+
+def _sort_hits(hits: list[dict], sort_by: str) -> list[dict]:
+    """Client-side re-sort of search hits. Unknown sort falls back to relevance."""
+    key = (sort_by or "RELEVANCE").upper()
+    if key in ("POPULARITY", "RELEVANCE"):
+        hits.sort(key=lambda h: h.get("downloads", 0), reverse=True)
+    elif key == "DATE":
+        hits.sort(key=lambda h: h.get("date_published", 0), reverse=True)
+    elif key == "RATING":
+        hits.sort(key=lambda h: (h.get("rating", 0), h.get("downloads", 0)), reverse=True)
+    elif key == "VERTICES_DESC":
+        hits.sort(key=lambda h: h.get("polycount", 0), reverse=True)
+    elif key == "VERTICES_ASC":
+        hits.sort(key=lambda h: h.get("polycount", 0))
+    elif key == "DIMENSIONS":
+        hits.sort(key=lambda h: (h.get("dim_max", 0.0), h.get("polycount", 0)), reverse=True)
+    elif key == "LICENSE":
+        hits.sort(key=lambda h: (_license_rank(h.get("license")), -(h.get("downloads", 0) or 0)))
+    else:
+        hits.sort(key=lambda h: h.get("downloads", 0), reverse=True)
+    return hits
+
+
+# Search filters (panel Filters box + search_all_online_models). All optional
+# and combinable; providers apply them over a widened window so pagination
+# keeps working, and the merged view re-filters for exactness.
+FILTER_FORMATS = ("ANY", "GLB", "FBX", "OBJ")
+FILTER_LICENSES = ("ANY", "CC0", "CC_BY", "OSS")
+FILTER_VERT_BANDS = ("ANY", "LIGHT", "MEDIUM", "DENSE", "HEAVY")
+# Vertex-count bands: light props, hero-prop range around the 50k pipeline
+# default, dense scans, heavy AI generations. Lower bound 1 excludes hits
+# with an unknown (0) count when a band is selected.
+VERT_BANDS = {
+    "LIGHT": (1, 10_000),
+    "MEDIUM": (10_000, 50_000),
+    "DENSE": (50_000, 200_000),
+    "HEAVY": (200_000, None),
+}
+_LICENSE_FILTER_MAX_RANK = {"CC0": 0, "CC_BY": 1, "OSS": 2}
+# Sketchfab tag slugs that advertise an original format (uploaders tag it;
+# the `source` archive itself carries no format label). GLB/GLTF come from
+# the archives dict instead -- verified live against api.sketchfab.com.
+_KNOWN_FORMAT_TAGS = {
+    "glb", "gltf", "fbx", "obj", "blend", "dae", "stl", "abc", "usd",
+    "usdz", "ply", "3ds", "3dm", "mb", "ma", "c4d", "max", "x3d",
+    "step", "iges", "sldprt", "sbsar",
+}
+
+
+def _epoch_year(epoch) -> int:
+    """Calendar year of an epoch timestamp; 0 when unknown."""
+    try:
+        import datetime as _dt
+
+        value = int(epoch or 0)
+        return _dt.datetime.fromtimestamp(value).year if value > 0 else 0
+    except Exception:
+        return 0
+
+
+def _match_format(hit: dict, file_format: str = "ANY") -> bool:
+    """Keep hits that positively advertise the requested format.
+
+    Poly Haven ships glTF (the download pipeline resolves a .glb/.gltf entry)
+    and Sketchfab reports glb/gltf/usdz archives plus uploader format tags;
+    anything else advertises nothing and is dropped when a format is picked.
+    """
+    fmt = (file_format or "ANY").upper()
+    if fmt == "ANY":
+        return True
+    advertised = {str(f).lower() for f in (hit.get("formats") or [])}
+    return fmt.lower() in advertised
+
+
+def _match_filters(
+    hit: dict,
+    license_filter: str = "ANY",
+    vert_band: str = "ANY",
+    since_year: int = 0,
+    author: str = "",
+    min_faces: int = 0,
+    max_faces: int = 0,
+) -> bool:
+    lf = (license_filter or "ANY").upper()
+    if lf != "ANY" and _license_rank(hit.get("license")) > _LICENSE_FILTER_MAX_RANK.get(lf, 99):
+        return False
+    vb = (vert_band or "ANY").upper()
+    if vb != "ANY" and vb in VERT_BANDS:
+        lo, hi = VERT_BANDS[vb]
+        verts = hit.get("polycount", 0) or 0
+        if verts < lo or (hi is not None and verts > hi):
+            return False
+    try:
+        face_lo = int(min_faces or 0)
+    except Exception:
+        face_lo = 0
+    try:
+        face_hi = int(max_faces or 0)
+    except Exception:
+        face_hi = 0
+    if face_lo or face_hi:
+        faces = hit.get("facecount", 0) or 0
+        if faces <= 0 or faces < face_lo or (face_hi and faces > face_hi):
+            return False
+    try:
+        year = int(since_year or 0)
+    except Exception:
+        year = 0
+    if year and _epoch_year(hit.get("date_published", 0)) < year:
+        return False
+    needle = (author or "").strip().lower()
+    if needle and needle not in str(hit.get("author", "") or "").lower():
+        return False
+    return True
+
+
+def _filters_active(license_filter="ANY", vert_band="ANY", since_year=0, author="", file_format="ANY", min_faces=0, max_faces=0) -> bool:
+    if (license_filter or "ANY").upper() != "ANY":
+        return True
+    if (vert_band or "ANY").upper() != "ANY":
+        return True
+    if (file_format or "ANY").upper() != "ANY":
+        return True
+    if (author or "").strip():
+        return True
+    for value in (since_year, min_faces, max_faces):
+        try:
+            if int(value or 0):
+                return True
+        except Exception:
+            if value:
+                return True
+    return False
+
 
 def get_polyhaven_models_index() -> dict[str, dict]:
     """Fetch and cache Poly Haven models index."""
@@ -46,52 +236,90 @@ def get_polyhaven_models_index() -> dict[str, dict]:
         return _POLYHAVEN_CACHE or {}
 
 
-def search_polyhaven_models(query: str, limit: int = 15, offset: int = 0) -> list[dict]:
-    """Search Poly Haven models ranked by relevance & popularity."""
+def _polyhaven_probe(asset_id: str, inf: dict) -> dict:
+    """Filterable view of a Poly Haven index entry (same fields as a hit)."""
+    return {
+        "license": "CC0",
+        "polycount": inf.get("polycount", 0),
+        # The index reports a single "polycount" with no verts/faces split;
+        # it doubles as the face-count proxy for min/max face filtering.
+        "facecount": inf.get("polycount", 0),
+        "date_published": _parse_epoch(inf.get("date_published")),
+        "author": ", ".join((inf.get("authors") or {}).keys()),
+        # The download pipeline resolves a .glb/.gltf entry for every model;
+        # no other format is advertised by the index.
+        "formats": ["glb", "gltf"],
+    }
+
+
+def search_polyhaven_models(query: str, limit: int = 15, offset: int = 0, sort_by: str = "RELEVANCE", file_format: str = "ANY", license_filter: str = "ANY", vert_band: str = "ANY", since_year: int = 0, author: str = "", min_faces: int = 0, max_faces: int = 0) -> list[dict]:
+    """Search Poly Haven models. The whole index is local, so every sort order
+    and filter paginates exactly. Rating is not provided by Poly Haven --
+    hits carry rating=0; every model is CC0 with a glTF download."""
     assets = get_polyhaven_models_index()
     if not assets:
         return []
 
     needle = (query or "").lower().strip()
     words = [w for w in needle.split() if w]
+    sort_key = (sort_by or "RELEVANCE").upper()
 
-    if not words:
-        ranked = sorted(assets.items(), key=lambda x: x[1].get("download_count", 0), reverse=True)
-        top_slice = ranked[offset:offset+limit]
+    def _matches(info):
+        if not words:
+            return True, 0
+        name = str(info.get("name", "")).lower()
+        tags = [str(t).lower() for t in info.get("tags", [])]
+        cats = [str(c).lower() for c in info.get("categories", [])]
+        desc = str(info.get("description", "")).lower()
+        score = 0
+        matched = False
+        for w in words:
+            if w == name:
+                score += 1000
+                matched = True
+            elif w in name:
+                score += 300
+                matched = True
+            elif any(w in t for t in tags):
+                score += 100
+                matched = True
+            elif any(w in c for c in cats):
+                score += 50
+                matched = True
+            elif w in desc:
+                score += 10
+                matched = True
+        return matched, score
+
+    ranked = []
+    for asset_id, info in assets.items():
+        matched, score = _matches(info)
+        if not matched:
+            continue
+        dl = info.get("download_count", 1)
+        relevance = score * (1 + math.log10(max(1, dl))) if words else float(info.get("download_count", 0))
+        ranked.append((relevance, asset_id, info))
+
+    if sort_key == "DATE":
+        ranked.sort(key=lambda x: _parse_epoch(x[2].get("date_published")), reverse=True)
+    elif sort_key in ("POPULARITY", "RATING"):
+        # No per-asset rating on Poly Haven; both fall back to download count.
+        ranked.sort(key=lambda x: x[2].get("download_count", 0), reverse=True)
+    elif sort_key == "VERTICES_DESC":
+        ranked.sort(key=lambda x: x[2].get("polycount", 0), reverse=True)
+    elif sort_key == "VERTICES_ASC":
+        ranked.sort(key=lambda x: x[2].get("polycount", 0))
+    elif sort_key == "DIMENSIONS":
+        ranked.sort(key=lambda x: (_dim_max(x[2].get("dimensions")), x[2].get("polycount", 0)), reverse=True)
     else:
-        scored = []
-        for asset_id, info in assets.items():
-            name = str(info.get("name", asset_id)).lower()
-            tags = [str(t).lower() for t in info.get("tags", [])]
-            cats = [str(c).lower() for c in info.get("categories", [])]
-            desc = str(info.get("description", "")).lower()
-
-            score = 0
-            matched = False
-            for w in words:
-                if w == name or w == asset_id.lower():
-                    score += 1000
-                    matched = True
-                elif w in name:
-                    score += 300
-                    matched = True
-                elif any(w in t for t in tags):
-                    score += 100
-                    matched = True
-                elif any(w in c for c in cats):
-                    score += 50
-                    matched = True
-                elif w in desc:
-                    score += 10
-                    matched = True
-
-            if matched:
-                dl = info.get("download_count", 1)
-                final_score = score * (1 + math.log10(max(1, dl)))
-                scored.append((final_score, asset_id, info))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        top_slice = [(aid, inf) for _, aid, inf in scored[offset:offset+limit]]
+        ranked.sort(key=lambda x: x[0], reverse=True)
+    if _filters_active(license_filter, vert_band, since_year, author, file_format, min_faces, max_faces):
+        ranked = [
+            (rel, aid, inf) for rel, aid, inf in ranked
+            if _match_filters(_polyhaven_probe(aid, inf), license_filter, vert_band, since_year, author, min_faces, max_faces)
+            and _match_format(_polyhaven_probe(aid, inf), file_format)
+        ]
+    top_slice = [(aid, inf) for _, aid, inf in ranked[offset:offset+limit]]
 
     hits = []
     for aid, inf in top_slice:
@@ -106,17 +334,92 @@ def search_polyhaven_models(query: str, limit: int = 15, offset: int = 0) -> lis
             "credits": f"Poly Haven CC0 by {authors}",
             "thumbnail_url": inf.get("thumbnail_url", f"https://cdn.polyhaven.com/asset_img/thumbs/{aid}.png?width=256&height=256"),
             "asset_type": "MODEL",
+            "date_published": _parse_epoch(inf.get("date_published")),
+            "rating": 0,
+            "views": 0,
+            "dim_max": _dim_max(inf.get("dimensions")),
+            "author": ", ".join((inf.get("authors") or {}).keys()),
+            "formats": ["glb", "gltf"],
+            "facecount": inf.get("polycount", 0),
         })
 
     return hits
 
 
-def search_sketchfab_models(query: str, limit: int = 15, offset: int = 0) -> list[dict]:
-    """Search Sketchfab models catalog via keyless public search API."""
+_SKETCHFAB_SERVER_SORT = {
+    "DATE": "-publishedAt",
+    "POPULARITY": "-viewCount",
+    "RATING": "-likeCount",
+}
+
+
+def _sketchfab_formats(result: dict) -> list[str]:
+    """Formats a model positively advertises: glb/gltf/usdz archives plus any
+    uploader tag slug naming a known original format (fbx/obj/blend/...).
+
+    Verified live: archives keys are flavour names (glb/gltf/source/usdz),
+    `file_format=` is ignored server-side, and uploaders tag originals
+    (e.g. a 'dae' tag) -- so this is the reliable signal, best-effort for
+    non-glb formats.
+    """
+    fmts = set()
+    for key in (result.get("archives") or {}).keys():
+        if str(key).lower() in ("glb", "gltf", "usdz"):
+            fmts.add(str(key).lower())
+    for tag in result.get("tags", []) or []:
+        slug = str((tag or {}).get("slug", "") if isinstance(tag, dict) else tag).lower()
+        if slug in _KNOWN_FORMAT_TAGS:
+            fmts.add(slug)
+    return sorted(fmts)
+
+
+def search_sketchfab_models(query: str, limit: int = 15, offset: int = 0, sort_by: str = "RELEVANCE", file_format: str = "ANY", license_filter: str = "ANY", vert_band: str = "ANY", since_year: int = 0, author: str = "", min_faces: int = 0, max_faces: int = 0) -> list[dict]:
+    """Search Sketchfab models catalog via keyless public search API.
+
+    DATE/POPULARITY/RATING are pushed server-side (sort_by=-publishedAt/
+    -viewCount/-likeCount) so pagination stays in order; everything else
+    (other sorts, all filters) runs client-side over a widened window
+    (limit+offset) before slicing the requested page. Face bounds go to the
+    server exactly (min/max_face_count -- verified live); a vertex band
+    without explicit face bounds adds a loose face-count prefilter (3x
+    headroom on the upper edge -- faces run ~2x vertices) with exact
+    client-side filtering after.
+    """
     if not query:
         return []
+    try:
+        face_lo = int(min_faces or 0)
+    except Exception:
+        face_lo = 0
+    try:
+        face_hi = int(max_faces or 0)
+    except Exception:
+        face_hi = 0
+    sort_key = (sort_by or "RELEVANCE").upper()
+    client_side = (
+        sort_key in ("VERTICES_DESC", "VERTICES_ASC", "DIMENSIONS", "LICENSE")
+        or _filters_active(license_filter, vert_band, since_year, author, file_format, min_faces, max_faces)
+    )
     encoded_query = urllib.parse.quote_plus(query.strip())
-    api_url = f"https://api.sketchfab.com/v3/search?type=models&q={encoded_query}&downloadable=true&count={limit}&offset={offset}"
+    count = limit + offset if client_side else limit
+    fetch_offset = 0 if client_side else offset
+    api_url = f"https://api.sketchfab.com/v3/search?type=models&q={encoded_query}&downloadable=true&count={count}&offset={fetch_offset}"
+    server_sort = _SKETCHFAB_SERVER_SORT.get(sort_key)
+    if server_sort:
+        api_url += f"&sort_by={server_sort}"
+    if face_lo or face_hi:
+        # Explicit face bounds win over the band-derived heuristic below.
+        if face_lo:
+            api_url += f"&min_face_count={face_lo}"
+        if face_hi:
+            api_url += f"&max_face_count={face_hi}"
+    else:
+        vb = (vert_band or "ANY").upper()
+        if vb in VERT_BANDS:
+            lo, hi = VERT_BANDS[vb]
+            api_url += f"&min_face_count={lo}"
+            if hi is not None:
+                api_url += f"&max_face_count={hi * 3}"
     req = urllib.request.Request(api_url, headers={"User-Agent": _USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=12) as resp:
@@ -128,28 +431,60 @@ def search_sketchfab_models(query: str, limit: int = 15, offset: int = 0) -> lis
                 continue
             thumbs = r.get("thumbnails", {}).get("images", [])
             thumb_url = thumbs[0].get("url") if thumbs else None
-            lic = r.get("license", {}).get("label", "CC Attribution")
-            user = r.get("user", {}).get("displayName") or r.get("user", {}).get("username") or "Sketchfab Creator"
+            lic = (r.get("license") or {}).get("label", "CC Attribution")
+            user = (r.get("user") or {}).get("displayName") or (r.get("user") or {}).get("username") or "Sketchfab Creator"
+            likes = r.get("likeCount", 0) or 0
             hits.append({
                 "id": uid,
                 "provider": "sketchfab",
                 "name": r.get("name", uid),
                 "polycount": r.get("vertexCount") or r.get("faceCount") or 0,
-                "downloads": r.get("likeCount", 0) * 10,
+                "downloads": likes * 10,
                 "license": lic,
                 "credits": f"Sketchfab ({lic}) by {user}",
                 "thumbnail_url": thumb_url,
                 "asset_type": "MODEL",
+                "date_published": _parse_epoch(r.get("publishedAt") or r.get("createdAt")),
+                "rating": likes,
+                "views": r.get("viewCount", 0) or 0,
+                "dim_max": 0.0,
+                "author": user,
+                "formats": _sketchfab_formats(r),
+                "facecount": r.get("faceCount", 0) or 0,
             })
+        if client_side:
+            hits = [
+                h for h in hits
+                if _match_filters(h, license_filter, vert_band, since_year, author, min_faces, max_faces)
+                and _match_format(h, file_format)
+            ]
+            # RELEVANCE keeps the server order; other sorts re-sort the page.
+            if sort_key != "RELEVANCE":
+                _sort_hits(hits, sort_key)
+            hits = hits[offset:offset+limit]
         return hits
     except Exception:
         return []
 
 
-def search_ambientcg_assets(query: str, limit: int = 15, offset: int = 0) -> list[dict]:
-    """Search ambientCG CC0 materials and assets."""
+def search_ambientcg_assets(query: str, limit: int = 15, offset: int = 0, sort_by: str = "RELEVANCE", file_format: str = "ANY", license_filter: str = "ANY", vert_band: str = "ANY", since_year: int = 0, author: str = "", min_faces: int = 0, max_faces: int = 0) -> list[dict]:
+    """Search ambientCG CC0 materials and assets.
+
+    Verified live: sort=Popular and sort=Latest are honoured (other values
+    fall back to the default order); results carry releaseDate, downloadCount
+    and dimensionX/Y/Z. No author, licence-variant, rating or format data --
+    every hit is CC0 with no reportable author/formats, so author/format and
+    vertex-band filters exclude these hits when set.
+    """
     encoded_query = urllib.parse.quote_plus(query.strip() if query else "Material")
-    api_url = f"https://ambientcg.com/api/v2/full_json?q={encoded_query}&limit={limit}&sort=Popular&offset={offset}"
+    sort_key = (sort_by or "RELEVANCE").upper()
+    client_side = sort_key not in ("RELEVANCE", "POPULARITY", "DATE") or _filters_active(
+        license_filter, vert_band, since_year, author, file_format, min_faces, max_faces
+    )
+    fetch_limit = limit + offset if client_side else limit
+    fetch_offset = 0 if client_side else offset
+    server_sort = "Latest" if sort_key == "DATE" else "Popular"
+    api_url = f"https://ambientcg.com/api/v2/full_json?q={encoded_query}&limit={fetch_limit}&sort={server_sort}&offset={fetch_offset}"
     req = urllib.request.Request(api_url, headers={"User-Agent": _USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=12) as resp:
@@ -160,6 +495,7 @@ def search_ambientcg_assets(query: str, limit: int = 15, offset: int = 0) -> lis
             if not aid:
                 continue
             thumb = a.get("previewImage", {}).get("256-PNG") if isinstance(a.get("previewImage"), dict) else None
+            dims = [a.get("dimensionX", 0) or 0, a.get("dimensionY", 0) or 0, a.get("dimensionZ", 0) or 0]
             hits.append({
                 "id": aid,
                 "provider": "ambientcg",
@@ -170,28 +506,84 @@ def search_ambientcg_assets(query: str, limit: int = 15, offset: int = 0) -> lis
                 "credits": f"ambientCG CC0 ({aid})",
                 "thumbnail_url": thumb,
                 "asset_type": "TEXTURE" if a.get("dataType") != "3DModel" else "MODEL",
+                "date_published": _parse_epoch(a.get("releaseDate") or a.get("earlyReleaseDate")),
+                "rating": 0,
+                "views": 0,
+                "dim_max": max([float(v) for v in dims] or [0.0]),
+                "author": "",
+                "formats": [],
+                "facecount": 0,
             })
+        if client_side:
+            hits = [
+                h for h in hits
+                if _match_filters(h, license_filter, vert_band, since_year, author, min_faces, max_faces)
+                and _match_format(h, file_format)
+            ]
+            # RELEVANCE/POPULARITY/DATE keep the server order; the rest re-sort.
+            if sort_key not in ("RELEVANCE", "POPULARITY", "DATE"):
+                _sort_hits(hits, sort_key)
+            hits = hits[offset:offset+limit]
         return hits
     except Exception:
         return []
 
 
-def search_all_online_models(query: str, provider: str = "ALL", limit: int = 20, offset: int = 0) -> list[dict]:
-    """Search online assets across providers with unified importance ranking."""
+def search_all_online_models(query: str, provider: str = "ALL", limit: int = 20, offset: int = 0, sort_by: str = "RELEVANCE", file_format: str = "ANY", license_filter: str = "ANY", vert_band: str = "ANY", since_year: int = 0, author: str = "", min_faces: int = 0, max_faces: int = 0) -> list[dict]:
+    """Search online assets across providers, merged, filtered and sorted.
+
+    sort_by: RELEVANCE (provider relevance, merged by popularity -- historical
+    behaviour), POPULARITY (downloads), DATE (newest first), RATING (likes,
+    mostly Sketchfab -- other providers carry 0), VERTICES_DESC/VERTICES_ASC
+    (vertex count), DIMENSIONS (largest physical dimension, Poly Haven models),
+    LICENSE (CC0 first, then CC-BY, then other OSS licences, restrictive last).
+
+    Filters (all combinable): file_format GLB/FBX/OBJ (advertised formats only:
+    Poly Haven glTF, Sketchfab archives + uploader format tags), license_filter
+    CC0/CC_BY/OSS (max openness tier), vert_band LIGHT/MEDIUM/DENSE/HEAVY
+    (vertex count; unknown counts excluded when set), since_year (published in
+    or after this year; unknown dates excluded when set), author (substring of
+    the creator name; ambientCG reports none and is excluded when set),
+    min_faces/max_faces (face count bounds, 0 = no bound; exact server-side on
+    Sketchfab, PolyHaven polycount doubles as the face proxy).
+    """
     provider = (provider or "ALL").upper()
+    sort_key = (sort_by or "RELEVANCE").upper()
+    if sort_key not in SORT_OPTIONS:
+        sort_key = "RELEVANCE"
     all_hits = []
 
     if provider in ("ALL", "POLYHAVEN"):
-        all_hits.extend(search_polyhaven_models(query, limit=limit, offset=offset))
+        all_hits.extend(search_polyhaven_models(
+            query, limit=limit, offset=offset, sort_by=sort_key,
+            file_format=file_format, license_filter=license_filter,
+            vert_band=vert_band, since_year=since_year, author=author,
+            min_faces=min_faces, max_faces=max_faces))
 
     if provider in ("ALL", "SKETCHFAB"):
-        all_hits.extend(search_sketchfab_models(query, limit=limit, offset=offset))
+        all_hits.extend(search_sketchfab_models(
+            query, limit=limit, offset=offset, sort_by=sort_key,
+            file_format=file_format, license_filter=license_filter,
+            vert_band=vert_band, since_year=since_year, author=author,
+            min_faces=min_faces, max_faces=max_faces))
 
     if provider in ("ALL", "AMBIENTCG"):
-        all_hits.extend(search_ambientcg_assets(query, limit=limit, offset=offset))
+        all_hits.extend(search_ambientcg_assets(
+            query, limit=limit, offset=offset, sort_by=sort_key,
+            file_format=file_format, license_filter=license_filter,
+            vert_band=vert_band, since_year=since_year, author=author,
+            min_faces=min_faces, max_faces=max_faces))
 
-    # Sort merged hits by popularity / downloads
-    all_hits.sort(key=lambda x: x.get("downloads", 0), reverse=True)
+    # Belt-and-braces merged filter (providers pre-filter their own page, but
+    # the merged view guarantees the contract) then the requested sort.
+    # RELEVANCE keeps the historical popularity-desc merge.
+    if _filters_active(license_filter, vert_band, since_year, author, file_format, min_faces, max_faces):
+        all_hits = [
+            h for h in all_hits
+            if _match_filters(h, license_filter, vert_band, since_year, author, min_faces, max_faces)
+            and _match_format(h, file_format)
+        ]
+    _sort_hits(all_hits, sort_key)
     return all_hits[:limit]
 
 
@@ -928,7 +1320,17 @@ class SuperImportTool(ToolBase):
             query = params.get("query") or params.get("search_query", "")
             provider = params.get("provider", "ALL")
             limit = int(params.get("limit", 20))
-            hits = search_all_online_models(query, provider=provider, limit=limit)
+            sort_by = params.get("sort_by", "RELEVANCE")
+            hits = search_all_online_models(
+                query, provider=provider, limit=limit, sort_by=sort_by,
+                file_format=params.get("file_format", "ANY"),
+                license_filter=params.get("license_filter", "ANY"),
+                vert_band=params.get("vert_band", "ANY"),
+                since_year=params.get("since_year", 0),
+                author=params.get("author", ""),
+                min_faces=params.get("min_faces", 0),
+                max_faces=params.get("max_faces", 0),
+            )
             return {
                 "success": True,
                 "message": f"Found {len(hits)} asset(s) matching '{query}' across {provider}",

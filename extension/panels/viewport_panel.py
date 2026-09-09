@@ -798,6 +798,11 @@ from .preferences import status_text_and_icon
 
 _preview_collections: dict = {}
 _search_results_cache: list = []
+# True when the last online search returned a full page (limit hits), i.e.
+# there may be another page after this one. Set by run_online_search, read
+# by the pagination row so Next is only enabled when it can go somewhere.
+_search_has_more: bool = False
+_SEARCH_PAGE_LIMIT = 15
 
 
 def _get_search_items_callback(self, context):
@@ -805,7 +810,7 @@ def _get_search_items_callback(self, context):
         return [("NONE", "Click 'Search Online' to find models", "Enter query and click search", "INFO", 0)]
     return _search_results_cache
 def run_online_search(self, context):
-    global _search_results_cache
+    global _search_results_cache, _search_has_more
     from ..bridge import dispatch
 
     query = self.search_query.strip()
@@ -833,9 +838,26 @@ def run_online_search(self, context):
 
         from ..tools.super_import_ops import download_thumbnail, search_all_online_models
 
-        limit = 15
+        limit = _SEARCH_PAGE_LIMIT
         offset = (self.search_page - 1) * limit
-        hits = search_all_online_models(query, provider=provider, limit=limit, offset=offset)
+        try:
+            since_year = int(getattr(self, "since_year", "0") or "0")
+        except Exception:
+            since_year = 0
+        hits = search_all_online_models(
+            query, provider=provider, limit=limit, offset=offset,
+            sort_by=getattr(self, "sort_by", "RELEVANCE"),
+            file_format=getattr(self, "file_format", "ANY"),
+            license_filter=getattr(self, "license_filter", "ANY"),
+            vert_band=getattr(self, "vert_band", "ANY"),
+            since_year=since_year,
+            author=getattr(self, "author", ""),
+            min_faces=getattr(self, "min_faces", 0),
+            max_faces=getattr(self, "max_faces", 0),
+        )
+        # A full page means there may be more behind it; a short/empty page
+        # means this is the last one, so Next must disable.
+        _search_has_more = bool(hits) and len(hits) >= limit
         if not hits:
             _search_results_cache = [
                 ("NONE", f"No models found for '{query}'", "Try another keyword or change provider", "ERROR", 0)
@@ -861,7 +883,24 @@ def run_online_search(self, context):
                 prov_tag = prov.upper()
                 poly_str = f"{hit['polycount']:,} verts" if hit.get("polycount") else "PBR asset"
                 label = f"[{prov_tag}] {hit['name']} ({poly_str})"
-                desc = f"{hit['credits']} | {hit['downloads']:,} downloads"
+                desc_parts = []
+                if getattr(self, "sort_by", "RELEVANCE") == "LICENSE":
+                    desc_parts.append(f"[{hit.get('license', '?')}]")
+                desc_parts += [f"{hit['credits']}", f"{hit.get('downloads', 0):,} downloads"]
+                if hit.get("rating"):
+                    desc_parts.append(f"{hit['rating']:,} likes")
+                if hit.get("views"):
+                    desc_parts.append(f"{hit['views']:,} views")
+                if hit.get("date_published"):
+                    try:
+                        import datetime as _dt
+                        year = _dt.datetime.fromtimestamp(hit["date_published"]).year
+                        desc_parts.append(str(year))
+                    except Exception:
+                        pass
+                if hit.get("dim_max"):
+                    desc_parts.append(f"max-dim {hit['dim_max']:.0f}")
+                desc = " | ".join(desc_parts)
                 items.append((full_key, label, desc, icon_id or "OBJECT_DATA", i))
             _search_results_cache = items
 
@@ -890,8 +929,18 @@ def _page_next_callback(self, context):
     if not self.page_next:
         return
     self.page_next = False
+    if not _search_has_more:
+        return
     self.search_page += 1
     run_online_search(self, context)
+
+
+def _search_scope_changed(self, context):
+    """New query/provider invalidates pagination: back to page 1 with no
+    known next page until a fresh search runs."""
+    global _search_has_more
+    self.search_page = 1
+    _search_has_more = False
 
 
 def _open_url_callback(self, context):
@@ -1046,14 +1095,109 @@ class MCP_OT_super_import(bpy.types.Operator):
             ("AMBIENTCG", "ambientCG (CC0 PBR Assets)", "Search ambientCG materials & models", "FILE_IMAGE", 3),
         ],
         default="ALL",
-        update=lambda self, context: setattr(self, "search_page", 1),
+        update=_search_scope_changed,
     )
 
     search_query: bpy.props.StringProperty(
         name="Search Query",
         description="Keyword to search online models (e.g. chair, table, car, plant, bottle, sword)",
         default="chair",
-        update=lambda self, context: setattr(self, "search_page", 1),
+        update=_search_scope_changed,
+    )
+
+    sort_by: bpy.props.EnumProperty(
+        name="Sort By",
+        description="Result order: relevance, popularity (downloads), date (newest), rating (likes, mostly Sketchfab), vertex count, physical dimensions (Poly Haven models), or licence openness (CC0 first)",
+        items=[
+            ("RELEVANCE", "Relevance", "Provider relevance ranking, merged by popularity", "SORTALPHA", 0),
+            ("POPULARITY", "Popularity", "Most downloaded first", "FUND", 1),
+            ("DATE", "Date (newest)", "Most recently published first", "TIME", 2),
+            ("RATING", "Rating (likes)", "Most liked first (Sketchfab likes; other providers carry no rating)", "SOLO_ON", 3),
+            ("VERTICES_DESC", "Vertices (high first)", "Highest vertex count first", "TRIA_DOWN", 4),
+            ("VERTICES_ASC", "Vertices (low first)", "Lowest vertex count first -- lightest assets", "TRIA_UP", 5),
+            ("DIMENSIONS", "Dimensions (largest)", "Largest physical size first (Poly Haven models)", "FULLSCREEN_ENTER", 6),
+            ("LICENSE", "Licence (open first)", "CC0 first, then CC-BY, then other OSS licences, restrictive last", "LOCKED", 7),
+        ],
+        default="RELEVANCE",
+        update=_search_scope_changed,
+    )
+
+    file_format: bpy.props.EnumProperty(
+        name="Format",
+        description="Keep only assets advertising this format: Poly Haven glTF plus Sketchfab glb archives and uploader format tags (best-effort for FBX/OBJ)",
+        items=[
+            ("ANY", "Any format", "No format filtering", "FILE", 0),
+            ("GLB", "GLB / glTF", "Assets with a glTF download (Poly Haven models, Sketchfab glb archives)", "MESH_DATA", 1),
+            ("FBX", "FBX", "Assets tagged FBX by the uploader (Sketchfab; best-effort)", "OBJECT_DATA", 2),
+            ("OBJ", "OBJ", "Assets tagged OBJ by the uploader (Sketchfab; best-effort)", "META_CUBE", 3),
+        ],
+        default="ANY",
+        update=_search_scope_changed,
+    )
+
+    license_filter: bpy.props.EnumProperty(
+        name="Licence",
+        description="Keep only licences at least this open: CC0 only, CC-BY-compatible, or any open-source licence",
+        items=[
+            ("ANY", "Any licence", "No licence filtering", "WORLD", 0),
+            ("CC0", "CC0 only", "Public domain, no attribution required", "LOCKED", 1),
+            ("CC_BY", "CC-BY compatible", "CC0 plus CC-BY family (attribution required)", "KEYFRAME", 2),
+            ("OSS", "Open licences", "CC0, CC-BY family and other OSS licences (MIT/Apache/GPL); excludes editorial/standard", "COMMUNITY", 3),
+        ],
+        default="ANY",
+        update=_search_scope_changed,
+    )
+
+    vert_band: bpy.props.EnumProperty(
+        name="Vertices",
+        description="Keep only assets in this vertex-count band (hits with unknown counts are excluded while set)",
+        items=[
+            ("ANY", "Any size", "No vertex-count filtering", "WORLD", 0),
+            ("LIGHT", "< 10k", "Light props, quick to simplify", "LIGHT", 1),
+            ("MEDIUM", "10k - 50k", "Hero-prop range around the 50k pipeline default", "DOT", 2),
+            ("DENSE", "50k - 200k", "Dense scans and detailed models", "MESH_CUBE", 3),
+            ("HEAVY", "> 200k", "Heavy AI generations and raw scans", "TRIA_DOWN", 4),
+        ],
+        default="ANY",
+        update=_search_scope_changed,
+    )
+
+    since_year: bpy.props.EnumProperty(
+        name="Since",
+        description="Keep only assets published in or after this year (hits with unknown dates are excluded while set)",
+        items=[
+            ("0", "Any time", "No recency filtering", "WORLD", 0),
+            ("2025", "2025+", "Published in 2025 or later", "TIME", 1),
+            ("2024", "2024+", "Published in 2024 or later", "TIME", 2),
+            ("2023", "2023+", "Published in 2023 or later", "TIME", 3),
+            ("2022", "2022+", "Published in 2022 or later", "TIME", 4),
+            ("2020", "2020+", "Published in 2020 or later", "TIME", 5),
+        ],
+        default="0",
+        update=_search_scope_changed,
+    )
+
+    author: bpy.props.StringProperty(
+        name="Author",
+        description="Keep only assets whose creator name contains this text (ambientCG reports no author and is excluded while set)",
+        default="",
+        update=_search_scope_changed,
+    )
+
+    min_faces: bpy.props.IntProperty(
+        name="Min Faces",
+        description="Keep only assets with at least this many faces (0 = no minimum; exact server-side on Sketchfab, Poly Haven polycount doubles as the proxy; unknown counts excluded while set)",
+        default=0,
+        min=0,
+        update=_search_scope_changed,
+    )
+
+    max_faces: bpy.props.IntProperty(
+        name="Max Faces",
+        description="Keep only assets with at most this many faces (0 = no maximum; exact server-side on Sketchfab, Poly Haven polycount doubles as the proxy; unknown counts excluded while set)",
+        default=0,
+        min=0,
+        update=_search_scope_changed,
     )
 
     trigger_search: bpy.props.BoolProperty(
@@ -1184,14 +1328,34 @@ class MCP_OT_super_import(bpy.types.Operator):
             row.prop(self, "search_query", text="Keyword", icon="VIEWZOOM")
             row.prop(self, "trigger_search", text="Search Online", icon="VIEWZOOM", toggle=True)
 
-            # Pagination row
+            box_search.prop(self, "sort_by", text="Sort")
+
+            box_filt = box_search.box()
+            box_filt.label(text="Filters", icon="FILTER")
+            row_f1 = box_filt.row(align=True)
+            row_f1.prop(self, "file_format")
+            row_f1.prop(self, "license_filter")
+            row_f2 = box_filt.row(align=True)
+            row_f2.prop(self, "vert_band")
+            row_f2.prop(self, "since_year")
+            row_f3 = box_filt.row(align=True)
+            row_f3.prop(self, "min_faces")
+            row_f3.prop(self, "max_faces")
+            box_filt.prop(self, "author", icon="USER")
+
+            # Pagination row -- each button lives in its own sub-row so it
+            # can be greyed out independently when it cannot go anywhere.
             row_page = box_search.row(align=True)
-            row_page.prop(self, "page_prev", text="Previous Page", icon="TRIA_LEFT", toggle=True)
+            sub_prev = row_page.row(align=True)
+            sub_prev.enabled = self.search_page > 1
+            sub_prev.prop(self, "page_prev", text="Previous Page", icon="TRIA_LEFT", toggle=True)
             row_page.label(text=f"Page {self.search_page}", icon="FILE_TICK")
-            row_page.prop(self, "page_next", text="Next Page", icon="TRIA_RIGHT", toggle=True)
+            sub_next = row_page.row(align=True)
+            sub_next.enabled = _search_has_more
+            sub_next.prop(self, "page_next", text="Next Page", icon="TRIA_RIGHT", toggle=True)
 
             box_search.separator()
-            box_search.label(text="Found Models (Ordered by Relevance & Popularity):", icon="SORT_DESC")
+            box_search.label(text="Found Models:", icon="SORT_DESC")
             box_search.template_icon_view(self, "selected_asset", show_labels=True)
             
             row_sel = box_search.row(align=True)
@@ -1392,25 +1556,54 @@ class MCP_OT_simplify_mesh(bpy.types.Operator):
 
     def draw(self, context):
         layout = self.layout
-        box = layout.box()
-        box.label(text="Mesh Reduction & Vertex Budget", icon="MOD_DECIM")
-        box.prop(self, "simplifier_tool")
-        box.prop(self, "target_vertices")
-
+        # Original vertex counts first -- the user needs these before
+        # choosing a target budget, so this box comes before the chooser.
+        box_src = layout.box()
+        box_src.label(text="Original Meshes & Vertex Counts", icon="OBJECT_DATA")
         mesh_objs = [obj for obj in context.selected_objects if obj.type == "MESH"]
         if not mesh_objs and context.active_object and context.active_object.type == "MESH":
             mesh_objs = [context.active_object]
 
         if mesh_objs:
             count = len(mesh_objs)
-            names_preview = ", ".join([o.name for o in mesh_objs[:3]])
-            if count > 3:
-                names_preview += f"... (+{count - 3} more)"
-            box.label(text=f"Selected meshes ({count}): {names_preview}", icon="OBJECT_DATA")
             total_verts = sum(len(o.data.vertices) for o in mesh_objs)
-            box.label(text=f"Total vertices: {total_verts:,}", icon="INFO")
+            for o in mesh_objs[:6]:
+                try:
+                    box_src.label(text=f"'{o.name}': {len(o.data.vertices):,} verts", icon="DOT")
+                except Exception:
+                    pass
+            if count > 6:
+                box_src.label(text=f"... (+{count - 6} more)", icon="INFO")
+            box_src.label(text=f"Total original: {total_verts:,} verts in {count} mesh(es)", icon="INFO")
         else:
-            box.label(text="No meshes selected! (Select in 3D View)", icon="ERROR")
+            box_src.label(text="No meshes selected! (Select in 3D View)", icon="ERROR")
+
+        box = layout.box()
+        box.label(text="Mesh Reduction & Vertex Budget", icon="MOD_DECIM")
+        box.prop(self, "simplifier_tool")
+        box.prop(self, "target_vertices")
+
+        # Previous run card -- what the last simplify did, before choosing
+        # the next budget. Cheap dict read; nothing to redraw-track.
+        try:
+            from ..tools.simplify_geometry_ops import get_last_card
+
+            prev = get_last_card()
+        except Exception:
+            prev = None
+        box_prev = layout.box()
+        box_prev.label(text="Previous Simplify", icon="TIME")
+        if not prev:
+            box_prev.label(text="No simplify run yet this session.", icon="INFO")
+        else:
+            orig, res = prev.get("original_vertices"), prev.get("result_vertices")
+            if orig is not None and res is not None:
+                box_prev.label(text=f"'{prev.get('object_name')}': {orig:,} -> {res:,} verts", icon="DOT")
+            else:
+                box_prev.label(text=f"'{prev.get('object_name')}'", icon="DOT")
+            box_prev.label(text=f"{prev.get('total_seconds', 0.0):.1f}s -- {prev.get('message', '')}"[:80], icon="INFO")
+            if prev.get("rolled_back") and prev.get("suggested_retry_target"):
+                box_prev.label(text=f"Rolled back; retry with target={prev['suggested_retry_target']}", icon="ERROR")
 
     def execute(self, context):
         import math

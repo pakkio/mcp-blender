@@ -146,7 +146,7 @@ from .shader_studio_ops import (
     SetupTriplanarMappingTool,
 )
 from .shape_key_ops import ManageShapeKeysTool
-from .simplify_geometry_ops import SimplifyGeometryTool
+from .simplify_geometry_ops import ShowLastSimplifyCardTool, SimplifyGeometryTool
 from .super_import_ops import NormalizeModelTool, SuperImportTool
 from .studio_lighting_ops import (
     ConfigureLightLinkingTool,
@@ -332,6 +332,7 @@ ALL_TOOLS = (
     SetupVFXShadowCatcherTool(),
     # --- 2.0.3 Additions: Budget-driven, form-preserving mesh simplification ---
     SimplifyGeometryTool(),
+    ShowLastSimplifyCardTool(),
     # --- 2.0.6 Additions: Localized structural renaming ---
     RegenElementNamesTool(),
     SeparateLogicalAreasTool(),

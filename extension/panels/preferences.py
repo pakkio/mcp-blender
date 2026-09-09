@@ -50,6 +50,8 @@ _SECRET_PROPS = {
 # edits on every redraw.
 _API_KEYS_SYNCED = False
 
+ENV_TO_PREF_PROP = {env: prop for prop, env in PREF_PROP_TO_ENV.items()}
+
 
 def _addon_version_string() -> str:
     """Reads the version Blender resolved from blender_manifest.toml at load
@@ -139,6 +141,100 @@ class MCP_OT_reload_api_keys(bpy.types.Operator):
         prefs = context.preferences.addons[ADDON_PACKAGE].preferences
         _sync_prefs_from_env(prefs, force=True)
         self.report({"INFO"}, "API key fields reloaded from .env")
+        return {"FINISHED"}
+
+
+class MCP_OT_edit_api_key(bpy.types.Operator):
+    bl_idname = "mcp_bridge.edit_api_key"
+    bl_label = "Modify API Key"
+    bl_description = (
+        "Change this one API key: shows the current masked value and takes "
+        "the replacement in a visible field, without touching the other keys"
+    )
+    bl_options = {"REGISTER"}
+
+    env_key: bpy.props.StringProperty(
+        name="Key",
+        description="Which .env key to modify (one of the managed API keys)",
+        default="",
+    )
+    new_value: bpy.props.StringProperty(
+        name="New value",
+        description="Paste the replacement key here (visible while typing so you can verify it). Leave empty to keep the current value",
+        default="",
+    )
+
+    def invoke(self, context, event):
+        if self.env_key not in ENV_TO_PREF_PROP:
+            self.report({"ERROR"}, f"Unknown API key '{self.env_key}'")
+            return {"CANCELLED"}
+        self.new_value = ""
+        return context.window_manager.invoke_props_dialog(self, width=420)
+
+    def draw(self, context):
+        from ..tools.env_info_ops import mask_secret
+
+        layout = self.layout
+        layout.label(text=self.env_key, icon="LOCKED")
+        try:
+            current = config.read_managed_keys().get(self.env_key, "")
+        except Exception:
+            current = ""
+        if current:
+            layout.label(text=f"Current: {mask_secret(current)}", icon="INFO")
+        else:
+            layout.label(text="Currently not set.", icon="INFO")
+        layout.prop(self, "new_value", text="New value")
+        layout.label(text="Empty keeps the current value (use Clear to remove it).", icon="INFO")
+
+    def execute(self, context):
+        if self.env_key not in ENV_TO_PREF_PROP:
+            self.report({"ERROR"}, f"Unknown API key '{self.env_key}'")
+            return {"CANCELLED"}
+        if not (self.new_value or ""):
+            self.report({"WARNING"}, f"{self.env_key} left unchanged (empty value -- use Clear to remove it)")
+            return {"CANCELLED"}
+        try:
+            path = config.save_managed_keys({self.env_key: self.new_value})
+        except OSError as exc:
+            self.report({"ERROR"}, f"Could not write .env: {exc}")
+            return {"CANCELLED"}
+        try:
+            prefs = context.preferences.addons[ADDON_PACKAGE].preferences
+            setattr(prefs, ENV_TO_PREF_PROP[self.env_key], self.new_value)
+        except Exception:
+            pass
+        self.report({"INFO"}, f"{self.env_key} updated in {path} (MCP server needs a restart)")
+        return {"FINISHED"}
+
+
+class MCP_OT_clear_api_key(bpy.types.Operator):
+    bl_idname = "mcp_bridge.clear_api_key"
+    bl_label = "Clear API Key"
+    bl_description = "Remove this one API key immediately (updates .env and this session)"
+    bl_options = {"REGISTER"}
+
+    env_key: bpy.props.StringProperty(
+        name="Key",
+        description="Which .env key to remove (one of the managed API keys)",
+        default="",
+    )
+
+    def execute(self, context):
+        if self.env_key not in ENV_TO_PREF_PROP:
+            self.report({"ERROR"}, f"Unknown API key '{self.env_key}'")
+            return {"CANCELLED"}
+        try:
+            path = config.save_managed_keys({self.env_key: ""})
+        except OSError as exc:
+            self.report({"ERROR"}, f"Could not write .env: {exc}")
+            return {"CANCELLED"}
+        try:
+            prefs = context.preferences.addons[ADDON_PACKAGE].preferences
+            setattr(prefs, ENV_TO_PREF_PROP[self.env_key], "")
+        except Exception:
+            pass
+        self.report({"INFO"}, f"{self.env_key} cleared ({path})")
         return {"FINISHED"}
 
 
@@ -235,6 +331,10 @@ class MCPBridgePreferences(bpy.types.AddonPreferences):
         ):
             r = box.row()
             r.prop(self, prop)
+            edit_op = r.operator(MCP_OT_edit_api_key.bl_idname, text="", icon="GREASEPENCIL")
+            edit_op.env_key = PREF_PROP_TO_ENV[prop]
+            clear_op = r.operator(MCP_OT_clear_api_key.bl_idname, text="", icon="X")
+            clear_op.env_key = PREF_PROP_TO_ENV[prop]
             r.label(text="set" if (getattr(self, prop, "") or "") else "not set",
                     icon="CHECKMARK" if (getattr(self, prop, "") or "") else "X")
         box.prop(self, "openrouter_vision_model")
@@ -251,5 +351,7 @@ CLASSES = (
     MCP_OT_stop_server,
     MCP_OT_save_api_keys,
     MCP_OT_reload_api_keys,
+    MCP_OT_edit_api_key,
+    MCP_OT_clear_api_key,
     MCPBridgePreferences,
 )

@@ -101,25 +101,48 @@ class _Progress:
         self.label = f"Simplify '{object_name}' ({verts:,} verts)"
         self.base = float(base)
         self.span = float(span)
-        self.started = time.time()
+        self.started = time.perf_counter()
+        self.started_wall = time.time()
         self._last_push = 0.0
         self._log = []
+        # History card: every phase() call is recorded here with timing,
+        # even when the HUD push is throttled or disabled (background mode).
+        # Each entry: {step, status, elapsed_s, dt_s, progress_pct, extra}.
+        self.history = []
+        self._last_step_t = self.started
 
-    def phase(self, status, fraction, force=False):
-        if not self.enabled:
-            return
-        now = time.time()
-        if not force and now - self._last_push < _HUD_MIN_INTERVAL_S:
-            return
-        self._last_push = now
+    def phase(self, status, fraction, force=False, extra=None):
+        now = time.perf_counter()
+        elapsed = now - self.started
+        dt = now - self._last_step_t
+        self._last_step_t = now
         percent = self.base + self.span * max(0.0, min(1.0, fraction))
+        entry = {
+            "step": len(self.history) + 1,
+            "status": str(status),
+            "elapsed_s": round(elapsed, 3),
+            "dt_s": round(dt, 3),
+            "progress_pct": round(percent, 1),
+        }
+        if isinstance(extra, dict) and extra:
+            try:
+                entry["extra"] = {k: extra[k] for k in extra}
+            except Exception:
+                entry["extra"] = {}
+        self.history.append(entry)
         self._log.append(status)
+        if not self.enabled:
+            return entry
+        wall_now = time.time()
+        if not force and wall_now - self._last_push < _HUD_MIN_INTERVAL_S:
+            return entry
+        self._last_push = wall_now
         try:
             from .progress_hud_ops import push_hud_update
 
             push_hud_update(
                 title=self.label,
-                status=f"{_human_hint(status)}  [{now - self.started:.0f}s]",
+                status=f"{_human_hint(status)}  [{elapsed:.0f}s]",
                 progress_percent=percent,
                 details=self._log[-4:],
                 force_redraw=True,
@@ -128,6 +151,92 @@ class _Progress:
             )
         except Exception:
             self.enabled = False
+        return entry
+
+    def total_seconds(self):
+        return round(time.perf_counter() - self.started, 3)
+
+    def history_payload(self):
+        return {"total_seconds": self.total_seconds(), "steps": list(self.history)}
+
+
+def _format_history_for_hud(history):
+    """One short line per step for the HUD card details list."""
+    lines = []
+    for e in history:
+        try:
+            lines.append(f"{e['elapsed_s']:.1f}s (+{e['dt_s']:.1f}s) [{e['progress_pct']:.0f}%] {e['status']}"[:96])
+        except Exception:
+            continue
+    return lines
+
+
+def _save_history_card(progress, status, completed_summary, next_steps=None):
+    """Persist the run's history card to the viewport HUD.
+
+    The live HUD only shows the last 4 details lines, but HUD_STATE keeps
+    the full list, so pass the whole formatted history -- the card becomes
+    the on-screen record of time data + each simplifying step.
+    """
+    try:
+        from .progress_hud_ops import push_hud_update
+
+        push_hud_update(
+            title=progress.label,
+            status=status,
+            progress_percent=100.0,
+            details=_format_history_for_hud(progress.history),
+            completed_summary=completed_summary,
+            next_steps=next_steps or [],
+            force_redraw=True,
+            cursor_badge=False,
+        )
+    except Exception:
+        pass
+
+
+# Last-run card: the previous simplify_geometry run, kept for the
+# "Previous Simplify" panel box and the show_last_simplify_card tool.
+_LAST_CARD: dict | None = None
+
+
+def get_last_card() -> dict | None:
+    """The previous simplify_geometry run's card, or None before the first run."""
+    return _LAST_CARD
+
+
+def _record_last_run(
+    *,
+    object_name,
+    success,
+    message,
+    original_vertices=None,
+    result_vertices=None,
+    target_vertices=None,
+    rolled_back=False,
+    dry_run=False,
+    gate_reason="",
+    history=None,
+    suggested_retry_target=None,
+):
+    global _LAST_CARD
+    history = history or {"total_seconds": 0.0, "steps": []}
+    _LAST_CARD = {
+        "object_name": object_name,
+        "success": bool(success),
+        "rolled_back": bool(rolled_back),
+        "dry_run": bool(dry_run),
+        "message": str(message),
+        "original_vertices": original_vertices,
+        "result_vertices": result_vertices,
+        "target_vertices": target_vertices,
+        "total_seconds": history.get("total_seconds", 0.0),
+        "gate_reason": str(gate_reason or ""),
+        "when": time.time(),
+        "suggested_retry_target": suggested_retry_target,
+        "history": history,
+    }
+    return _LAST_CARD
 
 
 class SimplifyGeometryTool(ToolBase):
@@ -137,7 +246,10 @@ class SimplifyGeometryTool(ToolBase):
         "loose geometry, closes pinhole gaps), removes vertices from flat/dense regions first, protects thin "
         "features and boundaries via curvature-weighted decimation, then measures the result and rolls back "
         "rather than returning a mesh with new holes or a lost feature. Use this instead of decimate_mesh on "
-        "imported/downloaded assets, which are usually not the welded manifold mesh decimate_mesh assumes."
+        "imported/downloaded assets, which are usually not the welded manifold mesh decimate_mesh assumes. "
+        "Returns a 'history' card with total_seconds plus per-step elapsed/dt for every phase "
+        "(analyze/repair/dissolve/pre-pass/collapse-solver-iterations/apply/measure) and saves the same "
+        "card to the viewport HUD."
     )
 
     def execute(self, params: dict) -> dict:
@@ -171,6 +283,15 @@ class SimplifyGeometryTool(ToolBase):
             return {"success": False, "message": error}
 
         if target_verts >= current_verts:
+            _record_last_run(
+                object_name=object_name,
+                success=True,
+                message=f"'{object_name}' already has {current_verts} vertices, at or under the {target_verts} target; nothing to do",
+                original_vertices=current_verts,
+                result_vertices=current_verts,
+                target_vertices=target_verts,
+                gate_reason="no reduction needed",
+            )
             return {
                 "success": True,
                 "message": f"'{object_name}' already has {current_verts} vertices, at or under the {target_verts} target; nothing to do",
@@ -216,9 +337,33 @@ class SimplifyGeometryTool(ToolBase):
 
         progress.phase("Analyzing mesh...", 0.02, force=True)
         analysis = _analyze(obj)
+        progress.phase(
+            f"Analyzed: {analysis['vertices']:,} verts, {analysis['faces']:,} faces, "
+            f"{analysis['boundary_edges']} boundary edges, {analysis['non_manifold_edges']} non-manifold",
+            0.05,
+            extra={"vertices": analysis["vertices"], "faces": analysis["faces"]},
+        )
 
         if dry_run:
             estimated_ratio = planner.estimate_initial_ratio(current_verts, len(obj.data.polygons), target_verts)
+            progress.phase("Done: dry run (no changes)", 1.0, force=True)
+            history = progress.history_payload()
+            _save_history_card(
+                progress,
+                status=f"Dry run {current_verts:,} -> ~{target_verts:,} verts [{history['total_seconds']:.1f}s]",
+                completed_summary=f"Dry run {current_verts:,} -> ~{target_verts:,} verts in {history['total_seconds']:.1f}s",
+            )
+            _record_last_run(
+                object_name=object_name,
+                success=True,
+                message=f"Dry run: '{object_name}' would be reduced from {current_verts} to ~{target_verts} vertices",
+                original_vertices=current_verts,
+                result_vertices=current_verts,
+                target_vertices=target_verts,
+                dry_run=True,
+                gate_reason="dry run (no changes)",
+                history=history,
+            )
             return {
                 "success": True,
                 "message": f"Dry run: '{object_name}' would be reduced from {current_verts} to ~{target_verts} vertices",
@@ -228,6 +373,7 @@ class SimplifyGeometryTool(ToolBase):
                 "analysis": analysis,
                 "estimated_initial_ratio": round(estimated_ratio, 4),
                 "dry_run": True,
+                "history": history,
             }
 
         original_mesh_copy = obj.data.copy()
@@ -265,12 +411,23 @@ class SimplifyGeometryTool(ToolBase):
             if repair:
                 progress.phase(f"Repairing {current_verts:,} vertices (weld, close gaps)...", 0.08, force=True)
                 repair_stats = _repair(bm, weld_factor=weld_factor, diag=diag)
+                progress.phase(
+                    f"Repaired: welded {repair_stats['welded_vertices']:,}, "
+                    f"filled {repair_stats['pinhole_faces_filled']} pinholes, {len(bm.verts):,} verts left",
+                    0.15,
+                    extra=repair_stats,
+                )
 
             delimit = {"MATERIAL", "SHARP"}
             if preserve_uv:
                 delimit |= {"UV", "SEAM"}
             progress.phase("Dissolving flat regions...", 0.22, force=True)
             dissolved = _dissolve_flat(bm, angle_limit_deg=sharp_angle, delimit=delimit)
+            progress.phase(
+                f"Dissolved {dissolved:,} verts in flat areas, {len(bm.verts):,} left",
+                0.28,
+                extra={"dissolved_vertices": dissolved, "verts_after": len(bm.verts)},
+            )
 
             bm.to_mesh(obj.data)
             obj.data.update()
@@ -287,6 +444,12 @@ class SimplifyGeometryTool(ToolBase):
                     force=True,
                 )
                 prepass_stats = _fast_prepass(obj, prepass_target)
+                progress.phase(
+                    f"Pre-pass done: {prepass_stats['vertices_before']:,} -> "
+                    f"{prepass_stats['vertices_after']:,} verts (ratio {prepass_stats['ratio']})",
+                    0.45,
+                    extra=prepass_stats,
+                )
 
             if len(obj.data.vertices) > target_verts:
                 collapse_stats = _weighted_collapse(
@@ -298,8 +461,21 @@ class SimplifyGeometryTool(ToolBase):
                     symmetry_axis=symmetry_axis,
                     progress=progress,
                 )
+                progress.phase(
+                    f"Collapsed: {collapse_stats.get('result_vertices', len(obj.data.vertices)):,} verts "
+                    f"(ratio {collapse_stats.get('final_ratio')}, {collapse_stats.get('iterations')} iters)",
+                    0.88,
+                    extra={
+                        "iterations": collapse_stats.get("iterations"),
+                        "final_ratio": collapse_stats.get("final_ratio"),
+                    },
+                )
             else:
                 collapse_stats = {"applied": False, "iterations": 0}
+                progress.phase(
+                    f"Collapse skipped: {len(obj.data.vertices):,} verts already at/below target",
+                    0.88,
+                )
 
             result_verts = len(obj.data.vertices)
 
@@ -309,6 +485,13 @@ class SimplifyGeometryTool(ToolBase):
             )
             new_boundary_edges = _count_boundary_edges(obj.data) - analysis["boundary_edges"]
             new_boundary_edges = max(0, new_boundary_edges)
+            progress.phase(
+                f"Measured: mean {deviation['mean_pct']:.3f}%, max {deviation['max_pct']:.3f}% "
+                f"({deviation['sampled_points']} pts, two_sided={deviation['two_sided']}), "
+                f"+{new_boundary_edges} boundary edges",
+                0.93,
+                extra={**deviation, "new_boundary_edges": new_boundary_edges},
+            )
 
             gate = planner.evaluate_quality_gate(
                 deviation_max_pct=deviation["max_pct"],
@@ -323,6 +506,31 @@ class SimplifyGeometryTool(ToolBase):
                 obj.data = original_mesh_copy
                 obj.data.update()
                 suggested_target = planner.suggest_retry_target(target_verts, deviation["max_pct"], max_deviation_pct)
+                history = progress.history_payload()
+                _save_history_card(
+                    progress,
+                    status=f"Rolled back {original_verts_count:,} verts [{history['total_seconds']:.1f}s]",
+                    completed_summary=(
+                        f"Rolled back {original_verts_count:,} verts in {history['total_seconds']:.1f}s "
+                        f"-- {gate['reason']}"
+                    ),
+                    next_steps=[f"Retry with target={suggested_target}"],
+                )
+                _record_last_run(
+                    object_name=object_name,
+                    success=False,
+                    message=(
+                        f"Quality gate failed and '{object_name}' was rolled back to its original {original_verts_count} "
+                        f"vertices: {gate['reason']}. Try target={suggested_target}."
+                    ),
+                    original_vertices=original_verts_count,
+                    result_vertices=original_verts_count,
+                    target_vertices=target_verts,
+                    rolled_back=True,
+                    gate_reason=gate["reason"],
+                    history=history,
+                    suggested_retry_target=suggested_target,
+                )
                 return {
                     "success": False,
                     "message": (
@@ -336,14 +544,41 @@ class SimplifyGeometryTool(ToolBase):
                     "target_vertices": target_verts,
                     "rolled_back": True,
                     "analysis": analysis,
+                    "repair": repair_stats,
+                    "dissolved_vertices": dissolved,
+                    "prepass": prepass_stats,
+                    "collapse": collapse_stats,
                     "deviation": deviation,
                     "new_boundary_edges": new_boundary_edges,
                     "gate": gate,
                     "suggested_retry_target": suggested_target,
+                    "history": history,
                 }
 
             bpy.data.meshes.remove(original_mesh_copy)
             progress.phase(f"Done: {original_verts_count:,} -> {result_verts:,} vertices", 1.0, force=True)
+            history = progress.history_payload()
+            _save_history_card(
+                progress,
+                status=f"Done {original_verts_count:,} -> {result_verts:,} verts [{history['total_seconds']:.1f}s]",
+                completed_summary=(
+                    f"Simplified {original_verts_count:,} -> {result_verts:,} verts "
+                    f"(target {target_verts:,}) in {history['total_seconds']:.1f}s"
+                ),
+            )
+            _record_last_run(
+                object_name=object_name,
+                success=True,
+                message=(
+                    f"Simplified '{object_name}' from {original_verts_count} to {result_verts} vertices "
+                    f"(target {target_verts}); {gate['reason']}"
+                ),
+                original_vertices=original_verts_count,
+                result_vertices=result_verts,
+                target_vertices=target_verts,
+                gate_reason=gate["reason"],
+                history=history,
+            )
 
             return {
                 "success": True,
@@ -365,6 +600,7 @@ class SimplifyGeometryTool(ToolBase):
                 "new_boundary_edges": new_boundary_edges,
                 "shape_keys_removed": had_shape_keys,
                 "gate": gate,
+                "history": history,
             }
         except Exception as exc:
             if rollback_on_failure:
@@ -374,8 +610,23 @@ class SimplifyGeometryTool(ToolBase):
                     obj.data.update()
                 except Exception:
                     pass
-            progress.phase(f"Failed: {exc}", 1.0, force=True)
-            return {"success": False, "message": f"simplify_geometry failed: {exc}"}
+            try:
+                progress.phase(f"Failed: {exc}", 1.0, force=True)
+                history = progress.history_payload()
+                _save_history_card(
+                    progress,
+                    status=f"Failed after {history['total_seconds']:.1f}s: {exc}",
+                    completed_summary=f"Simplify failed after {history['total_seconds']:.1f}s",
+                )
+            except Exception:
+                history = {"total_seconds": 0.0, "steps": []}
+            _record_last_run(
+                object_name=object_name,
+                success=False,
+                message=f"simplify_geometry failed: {exc}",
+                history=history,
+            )
+            return {"success": False, "message": f"simplify_geometry failed: {exc}", "history": history}
         finally:
             obj.hide_viewport = prev_hide_viewport
             try:
@@ -386,6 +637,44 @@ class SimplifyGeometryTool(ToolBase):
                 view_layer.objects.active = prev_active
             except Exception:
                 pass
+
+
+class ShowLastSimplifyCardTool(ToolBase):
+    name = "show_last_simplify_card"
+    description = (
+        "Re-show the previous simplify_geometry run's history card on the viewport HUD "
+        "and return it (object, vertex counts, total time, per-step timings, gate verdict). "
+        "Fails cleanly when no simplify run has happened yet this session."
+    )
+
+    def execute(self, params: dict) -> dict:
+        import types as _types
+
+        card = get_last_card()
+        if not card:
+            return {"success": False, "message": "No simplify_geometry run recorded yet this session"}
+        steps = (card.get("history") or {}).get("steps", [])
+        shim = _types.SimpleNamespace(
+            label=f"Simplify '{card.get('object_name')}' (previous run)",
+            history=steps,
+        )
+        _save_history_card(
+            shim,
+            status=f"Previous: {card.get('message', '')}"[:120],
+            completed_summary=(
+                f"Previous: {card.get('original_vertices')} -> {card.get('result_vertices')} verts "
+                f"in {card.get('total_seconds', 0.0):.1f}s"
+            ),
+            next_steps=(
+                [f"Retry with target={card['suggested_retry_target']}"]
+                if card.get("suggested_retry_target") else []
+            ),
+        )
+        return {
+            "success": True,
+            "message": f"Re-showing previous simplify card for '{card.get('object_name')}'",
+            "card": card,
+        }
 
 
 def _unusable_context(obj):
@@ -794,11 +1083,25 @@ def _weighted_collapse(obj, target_verts, preserve_boundaries, tolerance, use_sy
     if progress:
         progress.phase("Computing curvature weights...", 0.5, force=True)
     weights = _curvature_weights(obj.data, preserve_boundaries)
+    if progress:
+        try:
+            import numpy as _np
+
+            mean_w = float(_np.mean(weights)) if len(weights) else 0.0
+        except Exception:
+            mean_w = 0.0
+        progress.phase(
+            f"Curvature done: {len(weights):,} weights, mean protection {mean_w:.2f}",
+            0.55,
+            extra={"vertices": len(weights), "mean_weight": round(mean_w, 3)},
+        )
 
     vg_name = "_SimplifyProtect"
     if progress:
         progress.phase("Writing protection weights...", 0.58, force=True)
     _write_vertex_group(obj, vg_name, weights)
+    if progress:
+        progress.phase(f"Protection group written ({_WEIGHT_BUCKETS} levels)", 0.59)
 
     current_verts = len(obj.data.vertices)
     current_faces = len(obj.data.polygons)
@@ -823,7 +1126,7 @@ def _weighted_collapse(obj, target_verts, preserve_boundaries, tolerance, use_sy
         for iterations in range(1, _MAX_RATIO_ITERATIONS + 1):
             if progress:
                 progress.phase(
-                    f"Solving collapse ratio ({iterations}/{_MAX_RATIO_ITERATIONS})...",
+                    f"Solving collapse ratio ({iterations}/{_MAX_RATIO_ITERATIONS}, try {ratio:.4f})...",
                     0.6 + 0.05 * iterations,
                     force=True,
                 )
@@ -832,6 +1135,13 @@ def _weighted_collapse(obj, target_verts, preserve_boundaries, tolerance, use_sy
             depsgraph.update()
             result_verts = len(obj.evaluated_get(depsgraph).data.vertices)
             samples.append((ratio, result_verts))
+            if progress:
+                progress.phase(
+                    f"Solver iter {iterations}: ratio {ratio:.4f} -> {result_verts:,} verts "
+                    f"(target {target_verts:,})",
+                    0.6 + 0.05 * iterations,
+                    extra={"iteration": iterations, "ratio": round(ratio, 5), "result_verts": result_verts},
+                )
 
             if planner.within_tolerance(result_verts, target_verts, tolerance):
                 break
@@ -851,6 +1161,12 @@ def _weighted_collapse(obj, target_verts, preserve_boundaries, tolerance, use_sy
         if progress:
             progress.phase(f"Applying collapse (ratio {best_ratio:.4f})...", 0.85, force=True)
         _apply_decimate(obj, mod_name)
+        if progress:
+            progress.phase(
+                f"Collapse applied: {len(obj.data.vertices):,} verts (predicted {best_verts:,})",
+                0.87,
+                extra={"result_vertices": len(obj.data.vertices), "predicted_vertices": best_verts},
+            )
     finally:
         if mod_name in obj.modifiers:
             obj.modifiers.remove(obj.modifiers[mod_name])
