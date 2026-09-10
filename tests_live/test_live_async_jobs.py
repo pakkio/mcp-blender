@@ -27,6 +27,63 @@ def _pump_until(job_id, max_ticks=200):
     raise AssertionError(f"job '{job_id}' not terminal after {max_ticks} pump ticks")
 
 
+class TestLiveTaskHistory(LiveBpyTestCase):
+    """The Tasks History dialog data path: every record carries date/time,
+    duration, and state, and the full list (not just the panel's recent 8)
+    is reachable in one call."""
+
+    def setUp(self):
+        super().setUp()
+        scheduler.reset()
+
+    def tearDown(self):
+        scheduler.reset()
+        super().tearDown()
+
+    def test_task_records_carry_datetime_duration_state(self):
+        from extension.panels.viewport_panel import (
+            _active_job,
+            _fmt_job_duration,
+            _recent_jobs,
+        )
+
+        self.assertEqual(_fmt_job_duration(4.2), "4.2s")
+        self.assertEqual(_fmt_job_duration(125), "2m 05s")
+        self.assertEqual(_fmt_job_duration(3720), "1h 02m")
+        self.assertEqual(_fmt_job_duration(None), "--")
+
+        sub = scheduler.submit_job("list_jobs", {})
+        job, _ = _pump_until(sub["job_id"])
+        self.assertEqual(job.status, JobStatus.COMPLETED)
+
+        jobs = _recent_jobs(60)
+        mine = next(j for j in jobs if j["id"] == sub["job_id"])
+        # Date/time, duration, and state -- everything the history rows show.
+        self.assertRegex(mine["created"], r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+        self.assertGreaterEqual(mine["duration_seconds"], 0.0)
+        self.assertEqual(mine["status"], "COMPLETED")
+        self.assertIn("progress", mine)
+        # Nothing active: the panel box shows "No active task".
+        self.assertIsNone(_active_job(jobs))
+
+    def test_active_job_prefers_running_over_queued(self):
+        from extension.panels.viewport_panel import _active_job
+
+        running = {"id": "a", "status": "RUNNING"}
+        queued = {"id": "b", "status": "QUEUED"}
+        self.assertEqual(_active_job([queued, running])["id"], "a")
+        self.assertEqual(_active_job([queued])["id"], "b")
+        self.assertIsNone(_active_job([{"id": "c", "status": "COMPLETED"}]))
+
+    def setUp(self):
+        super().setUp()
+        scheduler.reset()
+
+    def tearDown(self):
+        scheduler.reset()
+        super().tearDown()
+
+
 class TestLiveAsyncJobs(LiveBpyTestCase):
     def setUp(self):
         super().setUp()

@@ -808,8 +808,10 @@ _JOB_TERMINAL_STATES = ("COMPLETED", "CANCELLED", "FAILED")
 
 def _fmt_job_duration(seconds) -> str:
     """Short human duration for task rows: '4.2s', '2m 05s', '1h 02m'."""
+    if seconds is None:
+        return "--"
     try:
-        total = max(0.0, float(seconds or 0.0))
+        total = max(0.0, float(seconds))
     except (TypeError, ValueError):
         return "--"
     if total < 60.0:
@@ -976,6 +978,55 @@ class MCP_OT_show_job_details(bpy.types.Operator):
             box = layout.box()
             box.alert = True
             box.label(text=str(job["error"])[:80], icon="ERROR")
+
+    def execute(self, context):
+        return {"FINISHED"}
+
+
+class MCP_OT_show_all_tasks(bpy.types.Operator):
+    bl_idname = "mcp_bridge.show_all_tasks"
+    bl_label = "Tasks History"
+    bl_description = "Show every tracked background task -- date/time, duration, state, progress, and message -- newest first"
+    bl_options = {"REGISTER"}
+
+    _jobs = []
+
+    def invoke(self, context, event):
+        jobs = _recent_jobs(60)
+        if not jobs:
+            self.report({"INFO"}, "No background tasks tracked yet")
+            return {"CANCELLED"}
+        MCP_OT_show_all_tasks._jobs = jobs
+        return context.window_manager.invoke_props_dialog(self, width=640)
+
+    def draw(self, context):
+        layout = self.layout
+        # Fresh read on every redraw: delete/prune buttons below mutate the
+        # records, and the next redraw (triggered by the click itself) then
+        # shows the list without the removed rows -- no stale snapshot.
+        jobs = _recent_jobs(60)
+        MCP_OT_show_all_tasks._jobs = jobs
+        layout.label(text=f"{len(jobs)} task(s), newest first:", icon="TIME")
+        for job in jobs:
+            state, icon = _JOB_STATE_ICONS.get(job.get("status"), (str(job.get("status")), "DOT"))
+            box = layout.box()
+            top = box.row()
+            top.label(text=f"{job.get('created', '--')} -- {job.get('name', '?')}", icon=icon)
+            top.label(text=state)
+            if job.get("status") in _JOB_TERMINAL_STATES:
+                op = top.operator(MCP_OT_delete_job.bl_idname, text="", icon="TRASH")
+                op.job_id = job["id"]
+            mid = box.row()
+            mid.label(text=f"Duration: {_fmt_job_duration(job.get('duration_seconds'))}")
+            mid.label(text=f"Progress: {job.get('progress', 0):.0f}%")
+            if job.get("message"):
+                box.label(text=str(job["message"])[:76], icon="WORDWRAP_ON")
+            if job.get("error"):
+                err = box.row()
+                err.alert = True
+                err.label(text=str(job["error"])[:76], icon="ERROR")
+        layout.separator()
+        layout.operator(MCP_OT_prune_old_jobs.bl_idname, icon="TRASH")
 
     def execute(self, context):
         return {"FINISHED"}
@@ -2322,6 +2373,7 @@ class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
                 op = row.operator(MCP_OT_delete_job.bl_idname, text="", icon="TRASH")
                 op.job_id = job["id"]
         box_tasks.operator(MCP_OT_prune_old_jobs.bl_idname, icon="TRASH")
+        box_tasks.operator(MCP_OT_show_all_tasks.bl_idname, icon="LINENUMBERS_ON")
 
 
 CLASSES = (
@@ -2342,5 +2394,6 @@ CLASSES = (
     MCP_OT_delete_job,
     MCP_OT_prune_old_jobs,
     MCP_OT_show_job_details,
+    MCP_OT_show_all_tasks,
     VIEW3D_PT_mcp_bridge,
 )
