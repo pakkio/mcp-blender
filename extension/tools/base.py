@@ -20,3 +20,14 @@ class ToolBase(abc.ABC):
     def execute(self, params: dict) -> dict:
         """Run on Blender's main thread. Return a JSON-serializable dict."""
         raise NotImplementedError
+
+    # Optional async protocol for long tools. A tool MAY define
+    #   def iter_steps(self, params: dict, ctx) -> generator
+    # yielding once per work chunk and returning the result dict. The bridge
+    # scheduler (bridge/scheduler.py) drives one chunk per timer tick so
+    # other bridge requests interleave between chunks; execute() should drive
+    # the same generator to completion (via bridge.jobs.drive_to_completion)
+    # so the synchronous and async paths run identical code. ctx is a
+    # bridge.jobs.JobCtx: ctx.report(fraction_0_1, status) mirrors progress
+    # into the job record (null-safe no-op with JobCtx() on the sync path,
+    # which already pushes the viewport HUD itself).

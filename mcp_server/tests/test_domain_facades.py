@@ -81,6 +81,18 @@ async def test_domain_facades_registration_and_dispatch():
     await scene_tool(action="busy")
     bridge.send_request.assert_awaited_with("bridge_status", {}, timeout=None)
 
+    # Test blender_scene "job_submit" dispatch: queues instead of running,
+    # so it gets the short instant timeout, not the heavy one.
+    await scene_tool(
+        action="job_submit",
+        params={"method": "separate_logical_areas", "params": {"lang": "it"}},
+    )
+    bridge.send_request.assert_awaited_with(
+        "submit_job",
+        {"method": "separate_logical_areas", "params": {"lang": "it"}},
+        timeout=5.0,
+    )
+
     # Test blender_physics_sim dispatch
     phys_tool = mcp.tools["blender_physics_sim"]
     await phys_tool(action="setup_cloth", params={"object_name": "Sheet"})

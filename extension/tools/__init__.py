@@ -71,7 +71,7 @@ from .hair_curves_ops import (
 )
 from .hierarchy_ops import OrganizeSceneHierarchyTool
 from .io_ops import ExportSceneTool, ImportFileTool
-from .job_ops import CancelJobTool, GetJobStatusTool, ListJobsTool
+from .job_ops import CancelJobTool, DeleteJobTool, GetJobStatusTool, ListJobsTool, PruneJobsTool
 from .lattice_deform_ops import (
     CreateLatticeDeformTool,
     DeformLatticePointsTool,
@@ -320,6 +320,8 @@ ALL_TOOLS = (
     GetJobStatusTool(),
     CancelJobTool(),
     ListJobsTool(),
+    DeleteJobTool(),
+    PruneJobsTool(),
     SetupIKConstraintTool(),
     SetupHumanoidRigPresetTool(),
     SetupSplineIKConstraintTool(),

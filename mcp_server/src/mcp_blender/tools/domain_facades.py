@@ -431,7 +431,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
     # 5. Scene, Hierarchy, Checkpoints & Background Jobs
     @mcp.tool(
         name="blender_scene",
-        description="Scene-level control: get scene info, organize semantic collections, create/restore snapshot checkpoints for safe undo, purge orphans, and monitor background jobs.",
+        description="Scene-level control: get scene info, organize semantic collections, create/restore snapshot checkpoints for safe undo, purge orphans, monitor background jobs, and submit any tool as an async background job.",
     )
     async def blender_scene(
         action: Literal[
@@ -445,6 +445,9 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "job_status",
             "job_list",
             "job_cancel",
+            "job_submit",
+            "job_delete",
+            "job_prune",
             "performance",
             "busy",
             "regen",
@@ -471,6 +474,9 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "job_status": "get_job_status",
             "job_list": "list_jobs",
             "job_cancel": "cancel_job",
+            "job_submit": "submit_job",
+            "job_delete": "delete_job",
+            "job_prune": "prune_jobs",
             "performance": "inspect_scene_performance",
             "busy": "bridge_status",
         }
@@ -479,7 +485,10 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
         # extension/bridge/server.py) regardless of what's running on the
         # main thread, so it never needs the heavy timeout -- it's the one
         # action explicitly meant to work *while* something else is heavy.
+        # "job_submit" likewise answers instantly (it only queues).
         timeout = HEAVY_REQUEST_TIMEOUT_S if action in ("checkpoint_create", "checkpoint_restore") else None
+        if action == "job_submit":
+            timeout = 5.0
         return await _dispatch_bridge(bridge, method, p, timeout=timeout)
 
     # Kept standalone (also reachable via blender_scene(action="busy")): a

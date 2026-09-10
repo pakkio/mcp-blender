@@ -53,3 +53,50 @@ class ListJobsTool(ToolBase):
             "count": len(jobs),
             "jobs": jobs,
         }
+
+
+class DeleteJobTool(ToolBase):
+    name = "delete_job"
+    description = (
+        "Forget one finished background job record (COMPLETED/CANCELLED/FAILED). "
+        "Refuses jobs that are still QUEUED/RUNNING -- abort them via cancel_job first."
+    )
+
+    def execute(self, params: dict) -> dict:
+        job_id = params.get("job_id")
+        if not job_id:
+            return {"success": False, "message": "'job_id' is required"}
+
+        outcome = GLOBAL_JOB_MANAGER.delete_job(job_id)
+        if outcome == "not_found":
+            return {"success": False, "message": f"Job '{job_id}' not found"}
+        if outcome == "active":
+            return {
+                "success": False,
+                "message": f"Job '{job_id}' is still active -- abort it via cancel_job first",
+            }
+        return {"success": True, "message": f"Deleted job '{job_id}'", "job_id": job_id}
+
+
+class PruneJobsTool(ToolBase):
+    name = "prune_jobs"
+    description = (
+        "Forget finished background job records older than a cutoff "
+        "(default 1 day). Active (QUEUED/RUNNING) jobs are never touched."
+    )
+
+    def execute(self, params: dict) -> dict:
+        try:
+            days = float(params.get("older_than_days", 1.0))
+        except (TypeError, ValueError):
+            return {"success": False, "message": "'older_than_days' must be a number"}
+        if days < 0:
+            return {"success": False, "message": "'older_than_days' must be >= 0"}
+
+        count = GLOBAL_JOB_MANAGER.prune_older_than(days * 86400.0)
+        return {
+            "success": True,
+            "message": f"Deleted {count} job(s) older than {days:g} day(s)",
+            "deleted": count,
+            "older_than_days": days,
+        }

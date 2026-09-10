@@ -48,7 +48,8 @@ for mod_name in list(sys.modules.keys()):
 
 from . import config  # noqa: E402
 from .bridge import dispatch, start_server, stop_server  # noqa: E402
-from .panels import CLASSES, draw_bridge_status, tick_statusbar_redraw  # noqa: E402
+from .bridge import scheduler  # noqa: E402
+from .panels import CLASSES, draw_bridge_status, tick_statusbar_redraw, tick_tasks_redraw  # noqa: E402
 from .tools import progress_hud_ops  # noqa: E402
 from .tools.progress_hud_ops import remove_draw_handler  # noqa: E402
 
@@ -101,8 +102,20 @@ def register() -> None:
         bpy.app.timers.register(dispatch.drain_queue, first_interval=0.05, persistent=True)
         _TIMER_REGISTERED = True
 
+    # Async-job pump: one work chunk per tick so queued bridge requests (and
+    # the viewport) interleave with long chunked jobs instead of freezing
+    # behind them. Same lifetime as drain_queue.
+    if not bpy.app.timers.is_registered(scheduler.pump_jobs):
+        bpy.app.timers.register(scheduler.pump_jobs, first_interval=0.2, persistent=True)
+
     if not bpy.app.timers.is_registered(tick_statusbar_redraw):
         bpy.app.timers.register(tick_statusbar_redraw, first_interval=1.0, persistent=True)
+
+    # Live task-box refresh: twice a second while a background task runs
+    # (the tick itself no-ops otherwise), so the current task's lines follow
+    # it with no clicks.
+    if not bpy.app.timers.is_registered(tick_tasks_redraw):
+        bpy.app.timers.register(tick_tasks_redraw, first_interval=0.5, persistent=True)
 
     bpy.types.STATUSBAR_HT_header.append(draw_bridge_status)
 
@@ -119,12 +132,16 @@ def unregister() -> None:
         bpy.app.timers.unregister(_kick_cursor_tracker)
 
     dispatch.bump_generation()
+    scheduler.reset()
     stop_server()
 
     bpy.types.STATUSBAR_HT_header.remove(draw_bridge_status)
 
     if bpy.app.timers.is_registered(tick_statusbar_redraw):
         bpy.app.timers.unregister(tick_statusbar_redraw)
+
+    if bpy.app.timers.is_registered(tick_tasks_redraw):
+        bpy.app.timers.unregister(tick_tasks_redraw)
 
     # Clear any header_text_set() the timer left behind -- otherwise a
     # disable while busy leaves stale status text stuck over the normal
@@ -137,6 +154,9 @@ def unregister() -> None:
     if _TIMER_REGISTERED and bpy.app.timers.is_registered(dispatch.drain_queue):
         bpy.app.timers.unregister(dispatch.drain_queue)
     _TIMER_REGISTERED = False
+
+    if bpy.app.timers.is_registered(scheduler.pump_jobs):
+        bpy.app.timers.unregister(scheduler.pump_jobs)
 
     remove_draw_handler()
 

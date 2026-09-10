@@ -48,7 +48,7 @@ async def test_batch_execution_with_rollback():
 async def test_job_tools():
     bridge = AsyncMock()
     bridge.send_request.return_value = {"success": True, "job": {"id": "job_123", "status": "RUNNING"}, "jobs": []}
-    get_fn, cancel_fn, list_fn = register_job_tools(FakeMCP(), bridge)
+    submit_fn, get_fn, cancel_fn, list_fn, delete_fn, prune_fn = register_job_tools(FakeMCP(), bridge)
 
     r1 = await get_fn(job_id="job_123")
     assert r1["success"] is True
@@ -61,6 +61,10 @@ async def test_job_tools():
     r3 = await list_fn(limit=10)
     assert r3["success"] is True
     assert bridge.send_request.call_args[0][0] == "list_jobs"
+
+    r4 = await submit_fn(method="list_jobs", params={})
+    assert r4["success"] is True
+    assert bridge.send_request.call_args[0][0] == "submit_job"
 
 
 @pytest.mark.asyncio

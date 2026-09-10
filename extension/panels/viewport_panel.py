@@ -669,13 +669,15 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
 # Skipped by default by the invoke-smoke-test in MCP_OT_verify_tools:
 # render/bake/batch/fluid tools can legitimately take real time even with no
 # target object, so blindly calling them from a health check would make
-# "Verify Tools" itself slow and unpredictable. Everything else is expected
+# "Verify Tools" itself slow and unpredictable. prune_jobs is skipped too:
+# with {} params it would really delete the user's finished jobs older than
+# a day -- a side effect no health check should have. Everything else is expected
 # (see ToolBase's own docstring contract) to validate required params and
 # return a clean {"success": False, ...} before doing any real work -- so
 # calling them with {} is a safe way to catch a tool that raises instead of
 # validating. include_heavy opts into running these too, behind an explicit
 # warning dialog (see draw()) since the user may want full coverage anyway.
-_VERIFY_SKIP_KEYWORDS = ("render", "bake", "batch", "fluid")
+_VERIFY_SKIP_KEYWORDS = ("render", "bake", "batch", "fluid", "prune")
 
 
 class MCP_OT_verify_tools(bpy.types.Operator):
@@ -685,13 +687,13 @@ class MCP_OT_verify_tools(bpy.types.Operator):
         "Health-check every registered tool: confirms it's well-formed, then calls execute({}) "
         "in an isolated temporary scene (never your actual scene) to catch tools that raise an "
         "unhandled exception instead of cleanly validating missing input. Skips render/bake/"
-        "batch/fluid tools by default -- opt in via the dialog to include them too"
+        "batch/fluid/prune tools by default -- opt in via the dialog to include them too"
     )
     bl_options = {"REGISTER"}
 
     include_heavy: bpy.props.BoolProperty(
-        name="Include Heavy Tools (render/bake/batch/fluid)",
-        description="Also run render/bake/batch/fluid tools -- can take noticeably longer",
+        name="Include Heavy Tools (render/bake/batch/fluid/prune)",
+        description="Also run render/bake/batch/fluid/prune tools -- can take noticeably longer (prune really deletes old finished jobs)",
         default=False,
     )
 
@@ -706,6 +708,7 @@ class MCP_OT_verify_tools(bpy.types.Operator):
             col.alert = True
             col.label(text="Warning: render/bake/batch/fluid tools will run for real,", icon="ERROR")
             col.label(text="in the isolated temp scene -- this can take noticeably longer.")
+            col.label(text="prune_jobs will really delete old finished jobs.", icon="ERROR")
 
     def execute(self, context):
         from ..tools.progress_hud_ops import push_hud_update
@@ -788,6 +791,193 @@ class MCP_OT_verify_tools(bpy.types.Operator):
             return {"CANCELLED"}
 
         self.report({"INFO"}, summary)
+        return {"FINISHED"}
+
+
+_JOB_STATE_ICONS = {
+    "QUEUED": ("Queued", "TIME"),
+    "RUNNING": ("Running", "PLAY"),
+    "COMPLETED": ("Done", "CHECKMARK"),
+    "CANCELLED": ("Cancelled", "X"),
+    "FAILED": ("Failed", "ERROR"),
+}
+
+_JOB_ACTIVE_STATES = ("QUEUED", "RUNNING")
+_JOB_TERMINAL_STATES = ("COMPLETED", "CANCELLED", "FAILED")
+
+
+def _fmt_job_duration(seconds) -> str:
+    """Short human duration for task rows: '4.2s', '2m 05s', '1h 02m'."""
+    try:
+        total = max(0.0, float(seconds or 0.0))
+    except (TypeError, ValueError):
+        return "--"
+    if total < 60.0:
+        return f"{total:.1f}s"
+    minutes = int(total // 60)
+    if minutes < 60:
+        return f"{minutes}m {int(total % 60):02d}s"
+    return f"{minutes // 60}h {minutes % 60:02d}m"
+
+
+def _recent_jobs(limit: int = 8) -> list:
+    try:
+        return TOOL_REGISTRY["list_jobs"].execute({"limit": limit}).get("jobs", [])
+    except Exception:
+        return []
+
+
+def _active_job(jobs: list) -> dict | None:
+    for job in jobs:
+        if job.get("status") == "RUNNING":
+            return job
+    for job in jobs:
+        if job.get("status") == "QUEUED":
+            return job
+    return None
+
+
+def _get_job(job_id: str) -> dict | None:
+    try:
+        res = TOOL_REGISTRY["get_job_status"].execute({"job_id": job_id})
+    except Exception:
+        return None
+    return res.get("job") if res.get("success") else None
+
+
+def tick_tasks_redraw() -> float:
+    """bpy.app.timers callback: while a background task is active, tag 3D
+    views for redraw twice a second so the Background Tasks panel box (and
+    its live progress lines) follows the running job without any clicks.
+    Idle cost is one cheap job-list read per tick, no redraws scheduled."""
+    try:
+        jobs = TOOL_REGISTRY["list_jobs"].execute({"limit": 5}).get("jobs", [])
+        if any(j.get("status") in _JOB_ACTIVE_STATES for j in jobs):
+            wm = getattr(bpy.context, "window_manager", None)
+            if wm is not None:
+                for window in wm.windows:
+                    for area in window.screen.areas:
+                        if area.type == "VIEW_3D":
+                            area.tag_redraw()
+    except Exception:
+        pass
+    return 0.5
+
+
+class MCP_OT_abort_job(bpy.types.Operator):
+    bl_idname = "mcp_bridge.abort_job"
+    bl_label = "Abort Task"
+    bl_description = "Abort a running or queued background task -- remaining steps are dropped"
+    bl_options = {"REGISTER"}
+
+    job_id: bpy.props.StringProperty(name="Job ID")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=380)
+
+    def draw(self, context):
+        layout = self.layout
+        job = _get_job(self.job_id) or {}
+        col = layout.column()
+        col.alert = True
+        col.label(text=f"Abort '{job.get('name', self.job_id)}'?", icon="ERROR")
+        if job.get("message"):
+            layout.label(text=str(job["message"])[:60], icon="INFO")
+
+    def execute(self, context):
+        result = TOOL_REGISTRY["cancel_job"].execute({"job_id": self.job_id})
+        if not result.get("success"):
+            self.report({"ERROR"}, result.get("message", "Abort failed"))
+            return {"CANCELLED"}
+        self.report({"INFO"}, result.get("message", f"Aborted '{self.job_id}'"))
+        return {"FINISHED"}
+
+
+class MCP_OT_delete_job(bpy.types.Operator):
+    bl_idname = "mcp_bridge.delete_job"
+    bl_label = "Delete Task"
+    bl_description = "Forget one finished background task record"
+    bl_options = {"REGISTER"}
+
+    job_id: bpy.props.StringProperty(name="Job ID")
+
+    def execute(self, context):
+        result = TOOL_REGISTRY["delete_job"].execute({"job_id": self.job_id})
+        if not result.get("success"):
+            self.report({"ERROR"}, result.get("message", "Delete failed"))
+            return {"CANCELLED"}
+        self.report({"INFO"}, result["message"])
+        return {"FINISHED"}
+
+
+class MCP_OT_prune_old_jobs(bpy.types.Operator):
+    bl_idname = "mcp_bridge.prune_old_jobs"
+    bl_label = "Clean Tasks Older Than 1 Day"
+    bl_description = "Forget finished background task records older than 1 day (running/queued tasks are never touched)"
+    bl_options = {"REGISTER"}
+
+    def execute(self, context):
+        result = TOOL_REGISTRY["prune_jobs"].execute({"older_than_days": 1.0})
+        if not result.get("success"):
+            self.report({"ERROR"}, result.get("message", "Cleanup failed"))
+            return {"CANCELLED"}
+        self.report({"INFO"}, result["message"])
+        return {"FINISHED"}
+
+
+class MCP_OT_show_job_details(bpy.types.Operator):
+    bl_idname = "mcp_bridge.show_job_details"
+    bl_label = "Task Details"
+    bl_description = "Show a task's full record: state, date/time, duration, progress, and every explanation line"
+    bl_options = {"REGISTER"}
+
+    job_id: bpy.props.StringProperty(name="Job ID")
+
+    _job = None
+
+    def invoke(self, context, event):
+        job = _get_job(self.job_id)
+        if not job:
+            self.report({"ERROR"}, f"Task '{self.job_id}' not found")
+            return {"CANCELLED"}
+        MCP_OT_show_job_details._job = job
+        return context.window_manager.invoke_props_dialog(self, width=520)
+
+    def draw(self, context):
+        layout = self.layout
+        job = MCP_OT_show_job_details._job or {}
+        state, icon = _JOB_STATE_ICONS.get(job.get("status"), (str(job.get("status")), "DOT"))
+        layout.label(text=f"{job.get('name', '?')} -- {state}", icon=icon)
+        layout.label(text=f"Started: {job.get('created', '--')}  |  Duration: {_fmt_job_duration(job.get('duration_seconds'))}", icon="TIME")
+        layout.label(text=f"Progress: {job.get('progress', 0):.0f}%  |  ID: {job.get('id', '')}", icon="INFO")
+        if job.get("message"):
+            box = layout.box()
+            box.label(text=str(job["message"])[:80], icon="WORDWRAP_ON")
+
+        result = job.get("result") or {}
+        if result.get("message"):
+            box = layout.box()
+            box.label(text="Result:", icon="CHECKMARK")
+            for chunk in [str(result["message"])[i:i + 70] for i in range(0, len(str(result["message"])), 70)][:4]:
+                box.label(text=chunk)
+        history = (result.get("history") or {})
+        steps = history.get("steps") or []
+        if steps:
+            box = layout.box()
+            total_s = history.get("total_seconds", 0.0)
+            box.label(text=f"Steps ({len(steps)}, {total_s:.1f}s total):", icon="LINENUMBERS_ON")
+            col = box.column()
+            col.scale_y = 0.9
+            for step in steps[-14:]:
+                col.label(text=f"{step.get('elapsed_s', 0):.1f}s [{step.get('progress_pct', 0):.0f}%] {str(step.get('status', ''))[:52]}")
+        if (result.get("vision_renames") or []):
+            layout.label(text=f"+{len(result['vision_renames'])} vision-assisted rename(s)", icon="OUTLINER_OB_MESH")
+        if job.get("error"):
+            box = layout.box()
+            box.alert = True
+            box.label(text=str(job["error"])[:80], icon="ERROR")
+
+    def execute(self, context):
         return {"FINISHED"}
 
 
@@ -2097,6 +2287,42 @@ class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
         layout.separator()
         layout.operator(MCP_OT_verify_tools.bl_idname, icon="TOOL_SETTINGS")
 
+        layout.separator()
+        box_tasks = layout.box()
+        box_tasks.label(text="Background Tasks", icon="TIME")
+        jobs = _recent_jobs(8)
+        active = _active_job(jobs)
+        if active is None:
+            box_tasks.label(text="No active task.", icon="INFO")
+        else:
+            state, icon = _JOB_STATE_ICONS.get(active.get("status"), (str(active.get("status")), "DOT"))
+            row = box_tasks.row()
+            row.label(text=f"{active.get('name', '?')} -- {state}", icon=icon)
+            op = row.operator(MCP_OT_abort_job.bl_idname, text="Abort", icon="X")
+            op.job_id = active["id"]
+            # Live lines: the redraw tick refreshes these twice a second
+            # while the task runs, so the current task can simply be
+            # followed here.
+            prog_line = f"{active.get('progress', 0):.0f}%"
+            msg = str(active.get("message") or "").strip()
+            if msg:
+                prog_line += f" -- {msg}"
+            box_tasks.label(text=prog_line[:60], icon="DOT")
+            op = box_tasks.operator(MCP_OT_show_job_details.bl_idname, text="Follow details...", icon="ZOOM_IN")
+            op.job_id = active["id"]
+        for job in [j for j in jobs if active is None or j.get("id") != active.get("id")][:6]:
+            state, icon = _JOB_STATE_ICONS.get(job.get("status"), (str(job.get("status")), "DOT"))
+            row = box_tasks.row()
+            created = str(job.get("created", ""))[5:16]  # "09-10 12:31"
+            row.label(text=f"{created} {job.get('name', '?')} -- {state}", icon=icon)
+            row.label(text=_fmt_job_duration(job.get("duration_seconds")))
+            op = row.operator(MCP_OT_show_job_details.bl_idname, text="", icon="ZOOM_IN")
+            op.job_id = job["id"]
+            if job.get("status") in _JOB_TERMINAL_STATES:
+                op = row.operator(MCP_OT_delete_job.bl_idname, text="", icon="TRASH")
+                op.job_id = job["id"]
+        box_tasks.operator(MCP_OT_prune_old_jobs.bl_idname, icon="TRASH")
+
 
 CLASSES = (
     MCP_OT_show_env_info,
@@ -2112,5 +2338,9 @@ CLASSES = (
     MCP_OT_show_separate_result,
     MCP_OT_separate_logical_areas,
     MCP_OT_verify_tools,
+    MCP_OT_abort_job,
+    MCP_OT_delete_job,
+    MCP_OT_prune_old_jobs,
+    MCP_OT_show_job_details,
     VIEW3D_PT_mcp_bridge,
 )

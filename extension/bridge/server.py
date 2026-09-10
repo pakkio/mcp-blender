@@ -24,7 +24,7 @@ from typing import Optional
 
 import websockets
 
-from . import dispatch, protocol
+from . import dispatch, protocol, scheduler
 from .. import config
 
 logger = logging.getLogger(__name__)
@@ -142,6 +142,26 @@ async def _handle_client(websocket) -> None:
                 )
             except Exception:
                 pass
+            return
+
+        if method == "submit_job":
+            # Same immediacy contract: only validates the method name and
+            # records a QUEUED job (plain dict writes in scheduler.submit_job),
+            # so the client gets its job_id back in milliseconds and is free
+            # to do other calls while the scheduler works through the queue
+            # chunk by chunk on the main thread.
+            try:
+                result = scheduler.submit_job(
+                    params.get("method", ""), params.get("params") or {}
+                )
+                await websocket.send(json.dumps(protocol.success_envelope(request_id, result)))
+            except Exception as exc:
+                try:
+                    await websocket.send(
+                        json.dumps(protocol.error_envelope(request_id, protocol.INTERNAL_ERROR, str(exc)))
+                    )
+                except Exception:
+                    pass
             return
 
         future = dispatch.enqueue(request_id, method, params)
