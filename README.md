@@ -1,4 +1,4 @@
-# mcp-blender (v2.1.7)
+# mcp-blender (v2.2.0)
 
 Exposes Blender to MCP clients (Claude Code, Claude Desktop, Antigravity, and others) through a
 high-performance two-process bridge, mirroring [mcp-unity](https://github.com/claudiopacchiega/mcp-unity)'s
@@ -22,9 +22,9 @@ Existing open-source Blender MCP implementations (e.g. `RFingAdam/mcp-blender`, 
 
 `mcp-blender` was engineered from the ground up as a **complete 3D production pipeline suite**:
 
-| Capability | Generic Blender MCPs | `mcp-blender` (v2.1.7) |
+| Capability | Generic Blender MCPs | `mcp-blender` (v2.2.0) |
 | :--- | :--- | :--- |
-| **Total Tool Count** | ~5 to 15 basic tools | **144 Native Tools / 10 Unified Low-Context Domain Facades** |
+| **Total Tool Count** | ~5 to 15 basic tools | **146 Native Tools / 10 Unified Low-Context Domain Facades** |
 | **Context Overhead** | Heavy per-tool bloat | **Ultra-Low Context Mode (90% token reduction) with on-demand `blender_docs`** |
 | **Architecture** | Legacy Blender 2.8/3.x zip addons | **Blender 4.2+ & 5.2+ Native Extension System** |
 | **Transactional Safety** | ❌ None (scene corrupts on fail) | **`execute_batch` (with automatic snapshot rollback on failure)** + **`create_scene_checkpoint`** / **`restore_scene_checkpoint`** |
@@ -292,11 +292,11 @@ The unified `.env` loader (v2.0.17) reads these. Each is only needed for the pro
 ### 1. Build and install the Blender extension
 
 ```bash
-python scripts/build_extension.py              # packages dist/mcp_bridge-2.1.7.zip
+python scripts/build_extension.py              # packages dist/mcp_bridge-2.2.0.zip
 ```
 
 3. In Blender 4.2+, open **Preferences > Get Extensions > Install from Disk...**,
-   select `dist/mcp_bridge-2.1.7.zip`, and enable **MCP Bridge**.
+   select `dist/mcp_bridge-2.2.0.zip`, and enable **MCP Bridge**.
 
 ### 2. Install the MCP Server
 
