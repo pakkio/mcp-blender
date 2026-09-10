@@ -28,6 +28,54 @@ HUD_STATE = {
 
 _DRAW_HANDLER = None
 
+# Latest progress snapshot for MCP clients, published by push_hud_update and
+# cleared by ClearProgressHUDTool. A single immutable dict swapped atomically
+# (GIL-atomic reference assignment, single writer on the main thread), so
+# bridge/dispatch.get_status() can read it lock-free straight off the
+# WebSocket thread -- even while the main thread is blocked deep inside the
+# heavy tool.execute() call that is producing the progress. That is what
+# makes the viewport % bar readable via the get_bridge_status MCP tool:
+# poll it from a second concurrent request while the heavy one is in flight.
+PROGRESS_SNAPSHOT: dict | None = None
+
+
+def get_progress_snapshot() -> dict | None:
+    """Newest published progress snapshot, or None if nothing reported yet
+    (or it was cleared). Returns a shallow copy with a copied details list
+    so callers can't mutate the published state."""
+    snap = PROGRESS_SNAPSHOT
+    if snap is None:
+        return None
+    copy = dict(snap)
+    copy["details"] = list(snap.get("details") or [])
+    copy["next_steps"] = list(snap.get("next_steps") or [])
+    return copy
+
+
+def _publish_snapshot() -> None:
+    """Freeze the current HUD_STATE into PROGRESS_SNAPSHOT. Cheap by design
+    (a few scalars + the few details lines already kept for the card) --
+    push_hud_update calls this on every phase, including throttled-out ones,
+    so an MCP poller sees the newest step even when the viewport repaint was
+    skipped."""
+    global PROGRESS_SNAPSHOT
+    try:
+        PROGRESS_SNAPSHOT = {
+            "visible": bool(HUD_STATE["visible"]),
+            "title": str(HUD_STATE["title"]),
+            "status": str(HUD_STATE["status"]),
+            "progress": round(max(0.0, min(100.0, float(HUD_STATE["progress"]))), 1),
+            "step_current": int(HUD_STATE["step_current"]),
+            "step_total": int(HUD_STATE["step_total"]),
+            "details": [str(d) for d in HUD_STATE["details"][-4:]],
+            "completed_summary": str(HUD_STATE["completed_summary"]),
+            "next_steps": [str(s) for s in HUD_STATE["next_steps"][-3:]],
+            "updated_at": time.time(),
+        }
+    except Exception:
+        pass  # snapshot must never break the HUD push it rides along with
+
+
 # Last-known mouse position, window coordinates (origin bottom-left, matching
 # event.mouse_x/mouse_y). Written by MCP_OT_track_cursor on every mouse move;
 # read by the badge painter to anchor itself next to the cursor. t == 0 means
@@ -417,6 +465,11 @@ def push_hud_update(
     else:
         HUD_STATE["auto_hide_time"] = 0.0
 
+    # Publish for MCP pollers on every call, throttled or not: the redraw
+    # above may be skipped, but the newest step/status must still be readable
+    # via get_bridge_status while the run continues.
+    _publish_snapshot()
+
     for window in bpy.context.window_manager.windows:
         for area in window.screen.areas:
             if area.type == "VIEW_3D":
@@ -479,6 +532,9 @@ class ClearProgressHUDTool(ToolBase):
         HUD_STATE["next_steps"] = []
         HUD_STATE["cursor_badge"] = False
         HUD_STATE["badge_text"] = ""
+        # Publish the cleared state too: otherwise an MCP poller keeps seeing
+        # the previous run's 100% card as if work were still in flight.
+        _publish_snapshot()
 
         for window in bpy.context.window_manager.windows:
             for area in window.screen.areas:

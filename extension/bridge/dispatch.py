@@ -30,6 +30,11 @@ is no bpy call in flight to report. mcp_server pushes a human-readable
 description of what it's doing via the "set_client_status" wire method
 (server.py, also answered without enqueueing) so Blender's own status bar
 can show it. Cleared the same way when the workflow finishes.
+
+get_status() additionally carries the newest viewport-HUD progress snapshot
+(title/status/percent/steps, published by push_hud_update on every phase),
+so an MCP client polling bridge_status while a heavy tool runs sees the same
+% bar a viewport user sees -- not just "busy, method X".
 """
 
 import json
@@ -66,6 +71,11 @@ _idle_streak = 0
 _status_lock = threading.Lock()
 _current_execution: Optional[dict] = None
 _client_status: Optional[dict] = None
+# The async job (bridge/scheduler.py) currently holding the main thread
+# between pump chunks, if any. Written/cleared by the scheduler on the main
+# thread under the same lock, so get_status() below can report "busy with
+# job X" without waiting for any chunk to finish.
+_active_job: Optional[dict] = None
 
 # Some params blobs are huge and not useful in a status check (execute_python's
 # "code", execute_batch's "commands"): cap the preview rather than ship the
@@ -221,12 +231,27 @@ def set_client_status(text: Optional[str]) -> None:
         _client_status = {"text": text, "started_at": time.time()} if text else None
 
 
+def set_active_job(info: Optional[dict]) -> None:
+    """Scheduler heartbeat: which async job (if any) currently owns the main
+    thread between pump chunks. Plain metadata write, like set_client_status."""
+    global _active_job
+    with _status_lock:
+        _active_job = dict(info, started_at=time.time()) if info else None
+
+
+def clear_active_job() -> None:
+    global _active_job
+    with _status_lock:
+        _active_job = None
+
+
 def get_status() -> dict:
     """Non-blocking snapshot, safe to call from the background asyncio thread
     even while the main thread is deep inside a heavy tool.execute() call."""
     with _status_lock:
         current = dict(_current_execution) if _current_execution else None
         client = dict(_client_status) if _client_status else None
+        active_job = dict(_active_job) if _active_job else None
     if current is not None:
         current["running_for_s"] = round(time.time() - current["started_at"], 2)
         current["description"] = (
@@ -235,10 +260,35 @@ def get_status() -> dict:
         )
     if client is not None:
         client["running_for_s"] = round(time.time() - client["started_at"], 2)
+    if active_job is not None:
+        active_job["running_for_s"] = round(time.time() - active_job["started_at"], 2)
+        active_job["description"] = (
+            f"job '{active_job.get('job_id')}' ({active_job.get('method')}) "
+            f"— running for {active_job['running_for_s']}s"
+        )
+    # Phased % progress the running tool last published to the viewport HUD
+    # (title/status/percent/steps, e.g. simplify_geometry's "Shrinking flat
+    # zones..." at 72%). Read lock-free: the HUD module publishes immutable
+    # snapshots by reference swap, so this never blocks behind the main
+    # thread and never observes a torn write. None until the first
+    # push_hud_update of the session. Lazy import: this module already loads
+    # the whole tools package at top level, but the status path must stay
+    # importable even while that package is mid-reload.
+    progress = None
+    try:
+        from ..tools.progress_hud_ops import get_progress_snapshot
+
+        progress = get_progress_snapshot()
+    except Exception:
+        progress = None
+    if progress is not None:
+        progress["age_s"] = round(time.time() - progress.get("updated_at", 0.0), 2)
     return {
         "success": True,
-        "busy": current is not None or client is not None,
+        "busy": current is not None or client is not None or active_job is not None,
         "current": current,
         "client_status": client,
+        "job": active_job,
+        "progress": progress,
         "queue_depth": _queue.qsize(),
     }
