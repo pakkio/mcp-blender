@@ -1,7 +1,9 @@
 """Real Sketchfab geometry: recover wheels from a joined, anonymously named car."""
 from collections import Counter
+import os
 from pathlib import Path
 import time
+import unittest
 from unittest.mock import patch
 
 import bpy
@@ -19,7 +21,58 @@ class TestSketchfabWheels(LiveBpyTestCase):
     def test_four_wheels_with_rotation_translation_and_nonuniform_scale(self):
         self._check_vehicle(True)
 
+    def test_four_wheels_runs_vision_rename_pipeline(self):
+        """Exercise the vision pass on the real car without network variance.
+
+        The callback stands in for the model response only; rendering, part
+        selection, progress accounting, and result propagation are real.
+        """
+        seen = []
+
+        def fake_vision_name(obj, category, lang, vision_model=None):
+            attr = obj.data.attributes.get('reference_wheel')
+            labels = {v.value for v in attr.data} if attr else {0}
+            wheel = next(iter(labels - {0}), None)
+            if wheel:
+                name = ('Front_Left_Wheel', 'Rear_Left_Wheel',
+                        'Front_Right_Wheel', 'Rear_Right_Wheel')[wheel - 1]
+                seen.append(name)
+                return name
+            return None
+
+        with patch('extension.tools.localization_ops._call_llm_classify', return_value=None), \
+             patch('extension.tools.localization_ops._vision_rename_piece', side_effect=fake_vision_name):
+            result = self._run_vehicle({'lang': 'en', 'use_vision': True,
+                                        'max_vision_renames': 9999,
+                                        'vision_only_generic': False})
+        self.assertTrue(result['success'], result)
+        self.assertEqual(set(seen), {'Front_Left_Wheel', 'Rear_Left_Wheel',
+                                     'Front_Right_Wheel', 'Rear_Right_Wheel'})
+        self.assertGreaterEqual(len(result['vision_renames']), 4)
+        self.assertTrue(result['vision_used'])
+
+    @unittest.skipUnless(os.environ.get('OPENROUTER_API_KEY'),
+                         'requires OPENROUTER_API_KEY for live Gemini vision')
+    def test_four_wheels_with_live_gemini_flash_vision(self):
+        """Opt-in integration test using OPENROUTER_VISION_MODEL/Gemini Flash."""
+        from extension.config import load_env_vars
+        load_env_vars()
+        result = self._run_vehicle({'lang': 'en', 'use_vision': True,
+                                    'max_vision_renames': 4,
+                                    'vision_only_generic': False,
+                                    'vision_model': 'google/gemini-2.5-flash'})
+        self.assertTrue(result['success'], result)
+        self.assertTrue(result['vision_used'])
+        self.assertGreater(len(result['vision_renames']), 0,
+                           'Gemini vision returned no names')
+        self.assertEqual(result.get('vision_used'), True)
+        self.assertEqual(result.get('vision_model', 'google/gemini-2.5-flash'),
+                         'google/gemini-2.5-flash')
+
     def _check_vehicle(self, transformed):
+        self._run_vehicle({}, transformed=transformed)
+
+    def _run_vehicle(self, params, transformed=False):
         bpy.ops.import_scene.gltf(filepath=str(FIXTURE))
         meshes = [o for o in bpy.context.scene.objects if o.type == 'MESH']
         body = next(o for o in meshes if len(o.data.polygons) == 5938)
@@ -66,7 +119,7 @@ class TestSketchfabWheels(LiveBpyTestCase):
         # Exercise actual geometry splitting + NumPy fallback; no network or
         # mocked segmentation/classification result containing the answer.
         with patch('extension.tools.localization_ops._call_llm_classify', return_value=None):
-            result = self.execute_tool('separate_logical_areas', {'lang': 'en'})
+            result = self.execute_tool('separate_logical_areas', params or {'lang': 'en'})
         elapsed = time.perf_counter() - start
         self.assertTrue(result['success'], result)
         bpy.context.view_layer.update()
@@ -98,3 +151,4 @@ class TestSketchfabWheels(LiveBpyTestCase):
         print(f'SKETCHFAB WHEEL TEST: {expected_faces} faces, {len(pieces)} pieces, '
               f'4/4 wheels, no body contamination, {elapsed:.3f}s; '
               f'wheel piece counts={[len(v) for v in wheel_pieces.values()]}')
+        return result

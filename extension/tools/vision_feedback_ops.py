@@ -250,7 +250,21 @@ class InspectFocusShotTool(ToolBase):
             final_out = os.path.abspath(os.path.expanduser(final_out))
 
             scene.render.filepath = final_out
-            bpy.ops.render.opengl(write_still=True)
+            if bpy.app.background:
+                # Headless live tests and server-side jobs have no OpenGL
+                # viewport context. Workbench still gives the vision model a
+                # useful silhouette/material image through the camera.
+                original_engine = scene.render.engine
+                original_percentage = scene.render.resolution_percentage
+                try:
+                    scene.render.engine = "BLENDER_WORKBENCH"
+                    scene.render.resolution_percentage = 100
+                    bpy.ops.render.render(write_still=True)
+                finally:
+                    scene.render.engine = original_engine
+                    scene.render.resolution_percentage = original_percentage
+            else:
+                bpy.ops.render.opengl(write_still=True)
 
             b64_data = None
             if include_base64 and os.path.isfile(final_out):
