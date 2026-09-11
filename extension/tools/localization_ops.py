@@ -1578,13 +1578,18 @@ def _extract_crease_pieces(dup_obj, groups, ngroups):
     src = bmesh.new()
     src.from_mesh(dup_obj.data)
     src.faces.ensure_lookup_table()
+    src.faces.index_update()
     src_uv = [l for l in src.loops.layers.uv]
+    src_mats = list(dup_obj.data.materials)
 
     new_bms = [bmesh.new() for _ in range(ngroups)]
     vmap = [{} for _ in range(ngroups)]
     new_uv = []
     for g in range(ngroups):
-        new_uv.append([l for l in new_bms[g].loops.layers.uv.new()] if src_uv else [])
+        # One layer per source UV layer, keeping source names: an unnamed
+        # new() layer comes out as a generic 'Float2' attribute and the piece
+        # renders untextured even though the UV data was copied.
+        new_uv.append([new_bms[g].loops.layers.uv.new(suv.name) for suv in src_uv])
 
     for face in src.faces:
         g = groups[face.index]
@@ -1605,7 +1610,7 @@ def _extract_crease_pieces(dup_obj, groups, ngroups):
         nf.smooth = face.smooth
         for i, loop in enumerate(face.loops):
             for suv, nuve in zip(src_uv, new_uv[g]):
-                nuve[nf.loops[i]].uv = suv[loop].uv
+                nf.loops[i][nuve].uv = loop[suv].uv
     src.free()
 
     pieces = []
@@ -1618,6 +1623,15 @@ def _extract_crease_pieces(dup_obj, groups, ngroups):
         me = bpy.data.meshes.new(f"{dup_obj.name}_part{g}")
         bm.to_mesh(me)
         bm.free()
+        # Keep the source's material slots in source order: the copied faces
+        # already carry source material_index values, so without the slots the
+        # pieces render grey. Unused slots on a piece are harmless.
+        for mat in src_mats:
+            try:
+                if mat is not None:
+                    me.materials.append(mat)
+            except Exception:
+                pass
         ob = bpy.data.objects.new(f"{dup_obj.name}_part{g}", me)
         ob.matrix_world = mw
         for col in dup_obj.users_collection:
@@ -1788,13 +1802,20 @@ def _vision_split_plan(dup_obj, lang: str, vision_model: str = None, custom_prom
     question = (
         "You are segmenting a 3D model so it can be cut into separate objects. The image is a 4-view "
         "contact sheet (Perspective, Front, Right, Top) of ONE object. List its distinct functional/logical "
-        "areas (for example door, roof, tower, wheel, handle -- whatever this object actually has). "
+        "areas. Look for EVERY visible area class, including small but functional ones -- typical examples: "
+        "doors/entrances, windows, roof/gable, towers, walls, platform/base/foundation, flags, battlements. "
+        "Do NOT omit a visible door, roof, or tower just because it is small; every semantically distinct "
+        "area the eye can see gets its own entry. "
         "Reply with ONLY a JSON object of this exact shape, no markdown, no commentary:\n"
-        '{"parts": [{"name": "Door", "category": "Doors", "center": [0.2, 0.4, 0.1]}, ...]}\n'
+        '{"parts": [{"name": "Door", "category": "Doors", "center": [0.2, 0.4, 0.1], "size": 0.1}, ...]}\n'
         "Rules: 2 to 12 parts. 'name' is the part in "
-        f"{lang_name} (one or two words, capitalized). 'category' groups similar parts (doors share one "
-        "category). 'center' is the part's approximate center as fractions of the object's bounding box: "
-        "x: 0 = left edge, 1 = right edge (front view); y: 0 = bottom, 1 = top; z: 0 = front face, 1 = back face."
+        f"{lang_name} (one or two words, capitalized). 'category' groups similar parts (all doors share one "
+        "category, all towers share one category). 'center' is the part's approximate center as fractions of "
+        "the object's bounding box: "
+        "x: 0 = left edge, 1 = right edge (front view); y: 0 = bottom, 1 = top; z: 0 = front face, 1 = back face. "
+        "'size' is the part's approximate radius as a fraction of the object's overall size "
+        "(0.05 = small detail like a flag, 0.1-0.15 = a door or window, 0.3+ = half the object) -- estimate "
+        "honestly, small parts get small sizes so they don't swallow their neighbours."
     )
     if custom_prompt.strip():
         question += f" User instructions (follow carefully): {custom_prompt.strip()}"
@@ -1821,7 +1842,14 @@ def _vision_split_plan(dup_obj, lang: str, vision_model: str = None, custom_prom
             continue
         if not all(v == v for v in frac):
             continue
-        parts.append({"name": name, "category": category, "center": frac})
+        try:
+            size = float(entry.get("size", 0.15))
+        except (TypeError, ValueError):
+            size = 0.15
+        if not (size == size):
+            size = 0.15
+        size = min(0.6, max(0.03, size))
+        parts.append({"name": name, "category": category, "center": frac, "size": size})
     if len(parts) < 1:
         return None, "Vision model returned no valid parts (need name + 3-number center each)."
     # De-duplicate names so every part object gets a distinct micro name.
@@ -1834,11 +1862,73 @@ def _vision_split_plan(dup_obj, lang: str, vision_model: str = None, custom_prom
     return parts, None
 
 
+def _face_albedo_colors(mesh):
+    """Per-face mean albedo RGB from the mesh's first image texture, or None
+    when the mesh has no image texture. Sampling is one pixel per face at the
+    face's mean UV -- cheap and plenty for region decisions."""
+    import numpy as np
+
+    img = None
+    for mat in mesh.materials:
+        if mat and mat.use_nodes:
+            for node in mat.node_tree.nodes:
+                if node.type == "TEX_IMAGE" and node.image:
+                    img = node.image
+                    break
+        if img is not None:
+            break
+    if img is None or not mesh.uv_layers:
+        return None
+    W, H = img.size[0], img.size[1]
+    if W <= 0 or H <= 0:
+        return None
+    try:
+        px = np.array(img.pixels[:], dtype=np.float64).reshape(H, W, 4)[:, :, :3]
+    except Exception:
+        return None
+    uv_layer = mesh.uv_layers[0].data
+    n = len(mesh.polygons)
+    if not n:
+        return None
+    loop_start = np.empty(n, dtype=np.int64)
+    loop_total = np.empty(n, dtype=np.int64)
+    mesh.polygons.foreach_get("loop_start", loop_start)
+    mesh.polygons.foreach_get("loop_total", loop_total)
+    uvco = np.empty(len(uv_layer) * 2, dtype=np.float64)
+    uv_layer.foreach_get("uv", uvco)
+    uvco = uvco.reshape(-1, 2)
+    out = np.empty((n, 3))
+    for i in range(n):
+        s = int(loop_start[i])
+        e = s + int(loop_total[i])
+        mu = float(uvco[s:e, 0].mean())
+        mv = float(uvco[s:e, 1].mean())
+        xi = min(W - 1, max(0, int(mu * (W - 1))))
+        yi = min(H - 1, max(0, int(mv * (H - 1))))
+        out[i] = px[yi, xi]
+    return out
+
+
 def _assign_faces_to_vision_seeds(mesh, seeds_local, min_part_faces):
-    """Partition mesh faces by nearest vision seed, then split each label into
-    connected components and merge fragments below min_part_faces into a
-    neighbouring component. Returns a per-face group id list."""
+    """Partition mesh faces by vision seeds, gated by albedo.
+
+    Each face starts with its nearest seed. Then, when the mesh has an image
+    texture, faces must also *look like* their part: the reference color of a
+    label is the albedo of the single face nearest its seed, and a face far
+    from its own label's color that matches another label's is relabeled.
+    Faces matching no label keep their seed -- so a misplaced seed degrades
+    to plain nearest-seed behavior instead of losing coverage. This is what
+    stops a door seed from claiming the whole surrounding facade on a
+    single-material mesh: the wall faces are beige, the door reference is
+    brown, and they get handed back.
+
+    Each surviving label is then split into connected components (cut
+    boundaries snap to creases, never mid-wall) and fragments below
+    min_part_faces merge into neighbours. Returns (per-face group id list,
+    group_labels) with group_labels[g] the vision-part index per group.
+    """
     import bmesh
+    import numpy as np
 
     bm = bmesh.new()
     bm.from_mesh(mesh)
@@ -1847,17 +1937,41 @@ def _assign_faces_to_vision_seeds(mesh, seeds_local, min_part_faces):
     n = len(bm.faces)
     if not n:
         bm.free()
-        return []
+        return [], []
 
-    centers = [f.calc_center_median() for f in bm.faces]
-    labels = []
-    for c in centers:
-        best, best_d = 0, None
-        for i, s in enumerate(seeds_local):
-            d = (c[0] - s[0]) ** 2 + (c[1] - s[1]) ** 2 + (c[2] - s[2]) ** 2
-            if best_d is None or d < best_d:
-                best, best_d = i, d
-        labels.append(best)
+    centers = np.empty(n * 3, dtype=np.float64)
+    for i, f in enumerate(bm.faces):
+        c = f.calc_center_median()
+        centers[i] = (c[0], c[1], c[2])
+    S = np.asarray([s[:3] for s in seeds_local], dtype=np.float64)
+    radii = np.array([s[3] if len(s) > 3 else 0.0 for s in seeds_local], dtype=np.float64)
+    k = len(seeds_local)
+    d2 = ((centers[:, None, :] - S[None, :, :]) ** 2).sum(-1)
+    # Radius-gated claim: a seed only claims faces inside its own radius (the
+    # vision model's size estimate), nearest first; faces inside no radius
+    # fall back to the nearest seed so coverage is never lost. Without this a
+    # small part's seed still wins distant faces by pure proximity.
+    dist = np.sqrt(d2)
+    inside = dist <= radii[None, :]
+    masked = np.where(inside, d2, np.inf)
+    has_claim = inside.any(1)
+    labels = np.empty(n, dtype=np.int64)
+    labels[has_claim] = masked[has_claim].argmin(1)
+    labels[~has_claim] = d2[~has_claim].argmin(1)
+
+    colors = _face_albedo_colors(mesh)
+    reassigned = 0
+    if colors is not None and k > 1:
+        seed_face = d2.argmin(0)
+        refs = colors[seed_face]
+        cd = ((colors[:, None, :] - refs[None, :, :]) ** 2).sum(-1) ** 0.5
+        own = cd[np.arange(n), labels]
+        best = cd.argmin(1)
+        bestd = cd[np.arange(n), best]
+        switch = (best != labels) & (bestd < 0.25) & (bestd + 0.02 < own)
+        reassigned = int(switch.sum())
+        labels = np.where(switch, best, labels)
+    labels = labels.tolist()
 
     parent = list(range(n))
     size = [1] * n
@@ -1903,10 +2017,10 @@ def _assign_faces_to_vision_seeds(mesh, seeds_local, min_part_faces):
         if r not in comp_label:
             comp_label[r] = labels[i]
     out_roots = sorted(set(roots))
-    # Group id per face + the vision-label index each group belongs to.
     gid_of_root = {r: i for i, r in enumerate(out_roots)}
     group_labels = [comp_label[r] for r in out_roots]
     bm.free()
+    print(f"[MCP Bridge] vision assign: {reassigned}/{n} faces relabeled by albedo")
     return [gid_of_root[r] for r in roots], group_labels
 
 
@@ -1934,14 +2048,17 @@ def _separate_vision(dup_obj, existing_objs, lang, vision_model, min_part_faces,
     zs_l = [c[2] for c in dup_obj.bound_box]
     lo_l = (min(xs_l), min(ys_l), min(zs_l))
     diag_l = (max(xs_l) - min(xs_l), max(ys_l) - min(ys_l), max(zs_l) - min(zs_l))
+    import math
+    diag_len = math.sqrt(sum(d * d for d in diag_l)) or 1.0
     seeds_local = [
         (lo_l[0] + p["center"][0] * diag_l[0],
          lo_l[1] + p["center"][2] * diag_l[1],
-         lo_l[2] + p["center"][1] * diag_l[2])
+         lo_l[2] + p["center"][1] * diag_l[2],
+         p.get("size", 0.15) * diag_len)
         for p in parts
     ]
 
-    eff_min = min_part_faces or max(10, int(total * 0.02))
+    eff_min = min_part_faces or max(10, int(total * 0.005))
     groups, group_labels = _assign_faces_to_vision_seeds(mesh, seeds_local, eff_min)
     ngroups = len(set(groups)) if groups else 0
     if ngroups < 1:
