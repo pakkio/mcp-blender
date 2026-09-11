@@ -6,7 +6,10 @@ from pydantic import ValidationError
 
 from conftest import FakeMCP
 from mcp_blender.errors import BridgeError
-from mcp_blender.tools.localization_ops import register_localization_tools
+from mcp_blender.tools.localization_ops import (
+    register_localization_tools,
+    register_separation_confirm_tool,
+)
 
 _STRUCTURAL_TREE = {
     "old_name": "Scene Collection",
@@ -268,6 +271,12 @@ async def test_separate_logical_areas_selects_then_separates():
         lang="en",
         reorg_level="DEEP",
         custom_prompt="ignore screws",
+        split_method="crease",
+        sharp_angle=60.0,
+        target_parts=4,
+        min_part_faces=25,
+        create_checkpoint=False,
+        split_only=True,
         use_vision=True,
         max_vision_renames=7,
         vision_model="some/model",
@@ -289,6 +298,12 @@ async def test_separate_logical_areas_selects_then_separates():
             "lang": "en",
             "reorg_level": "DEEP",
             "custom_prompt": "ignore screws",
+            "split_method": "crease",
+            "sharp_angle": 60.0,
+            "target_parts": 4,
+            "min_part_faces": 25,
+            "create_checkpoint": False,
+            "split_only": True,
             "use_vision": True,
             "max_vision_renames": 7,
             "vision_model": "some/model",
@@ -311,6 +326,12 @@ async def test_separate_logical_areas_defaults_are_forwarded():
         "lang": "it",
         "reorg_level": "STANDARD",
         "custom_prompt": "",
+        "split_method": "auto",
+        "sharp_angle": 45.0,
+        "target_parts": 0,
+        "min_part_faces": 0,
+        "create_checkpoint": True,
+        "split_only": False,
         "use_vision": False,
         "max_vision_renames": 9999,
         "vision_model": None,
@@ -324,6 +345,7 @@ async def test_separate_logical_areas_defaults_are_forwarded():
     [
         {"lang": "xx"},           # unsupported lang silently fell back to Italian
         {"reorg_level": "DEEEP"}, # unrecognized level silently fell back to STANDARD
+        {"split_method": "laser"}, # unknown cutter silently degraded instead of erroring
     ],
 )
 async def test_separate_logical_areas_rejects_out_of_range_enums(kwargs):
@@ -383,3 +405,42 @@ async def test_separate_logical_areas_bridge_failure_raises():
 
     with pytest.raises(BridgeError, match="Please select at least one MESH object"):
         await separate_tool(objects=["NotAMesh"])
+
+
+@pytest.mark.asyncio
+async def test_separate_accepts_vision_split_method():
+    bridge = AsyncMock()
+    bridge.send_request.return_value = {"success": True, "message": "ok"}
+    _regen_tool, separate_tool = register_localization_tools(FakeMCP(), bridge)
+
+    await separate_tool(objects=["Car"], split_method="vision")
+
+    _select_call, separate_call = bridge.send_request.await_args_list
+    assert separate_call.args[1]["split_method"] == "vision"
+
+
+@pytest.mark.asyncio
+async def test_confirm_separated_parts_forwards_pending_id_and_keep():
+    bridge = AsyncMock()
+    bridge.send_request.return_value = {"success": True, "message": "ok"}
+    confirm_tool = register_separation_confirm_tool(FakeMCP(), bridge)
+
+    result = await confirm_tool(pending_id="sep_123", keep=["Part_A", "Part_B"])
+
+    assert result["success"] is True
+    (confirm_call,) = bridge.send_request.await_args_list
+    assert confirm_call.args == (
+        "confirm_separated_parts",
+        {"pending_id": "sep_123", "keep": ["Part_A", "Part_B"]},
+    )
+    assert confirm_call.kwargs["timeout"] == 600.0
+
+
+@pytest.mark.asyncio
+async def test_confirm_separated_parts_bridge_failure_raises():
+    bridge = AsyncMock()
+    bridge.send_request.return_value = {"success": False, "message": "Unknown or expired pending separation"}
+    confirm_tool = register_separation_confirm_tool(FakeMCP(), bridge)
+
+    with pytest.raises(BridgeError, match="Unknown or expired pending separation"):
+        await confirm_tool(pending_id="sep_stale", keep=[])

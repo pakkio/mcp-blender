@@ -265,9 +265,16 @@ _RENAME_HINTS = (
 )
 
 _SEPARATE_HINTS = (
+    ("Snapshotting", "Saving a snapshot so this run can be undone"),
     ("Duplicating", "Copying the mesh so the original stays safe"),
     ("Splitting", "Cutting the mesh into separate parts"),
     ("Split into", "Cutting done - measuring the parts"),
+    ("Loose split", "Loose parts did not cut it - trying the next cutter"),
+    ("Material split", "Material did not cut it - asking the vision model"),
+    ("Vision split", "Vision model is deciding the parts"),
+    ("Asking vision", "Asking the AI to find the parts"),
+    ("Asking the vision", "Asking the AI to find the parts"),
+    ("Using vision", "Naming parts from the vision split"),
     ("Reading", "Measuring where each part sits"),
     ("Asking LLM", "Asking the AI to group parts into assemblies"),
     ("Grouped", "Sorting parts into sub-assembly groups"),
@@ -1440,18 +1447,551 @@ def _heuristic_classify(parts_info: list[dict], original_name: str, reorg_level:
     return {"groups": groups, "names": names}
 
 
+def _crease_face_groups(mesh, sharp_angle=45.0, target_parts=0, min_part_faces=0):
+    """Partition mesh faces into groups bounded by creases -- edges whose
+    dihedral angle exceeds `sharp_angle` degrees.
+
+    Faces connected across non-crease edges stay together (union-find); each
+    crease edge is a cut candidate. When `target_parts` > 0, repeatedly merge
+    the smallest group into its weakest (lowest-angle) crease neighbour until
+    that count is reached. Else when `min_part_faces` > 0, keep merging small
+    groups into neighbours until every group reaches the minimum size -- the
+    "merge tiny fragments into neighbours" behaviour. Both are controlled and
+    reproducible, and handle a single fully-connected single-material mesh
+    that LOOSE/MATERIAL separation can never split.
+
+    Returns a per-face group id, length == len(mesh.polygons).
+    """
+    import math
+    import heapq
+    import bmesh
+
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    bm.faces.ensure_lookup_table()
+    bm.faces.index_update()
+    n = len(bm.faces)
+    if not n:
+        bm.free()
+        return []
+
+    parent = list(range(n))
+    size = [1] * n
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return ra
+        if size[ra] < size[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        size[ra] += size[rb]
+        return ra
+
+    cuts = []
+    for e in bm.edges:
+        lf = e.link_faces
+        if len(lf) == 2:
+            ang = math.degrees(e.calc_face_angle(0))
+            if ang > sharp_angle:
+                cuts.append((ang, lf[0].index, lf[1].index))
+                continue
+        for i in range(1, len(lf)):
+            union(lf[0].index, lf[i].index)
+
+    def roots():
+        return [find(i) for i in range(n)]
+
+    if target_parts and target_parts > 0:
+        adj = {}
+        for ang, a, b in cuts:
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                adj.setdefault(ra, {}).setdefault(rb, ang)
+                adj.setdefault(rb, {}).setdefault(ra, ang)
+        comps = len({find(i) for i in range(n)})
+        heap = [(size[r], r) for r in {find(i) for i in range(n)}]
+        heapq.heapify(heap)
+        while comps > target_parts and heap:
+            sz, r = heapq.heappop(heap)
+            r = find(r)
+            if size[r] != sz:
+                continue
+            nbrs = {find(nr): a for nr, a in adj.get(r, {}).items() if find(nr) != r}
+            if not nbrs:
+                continue
+            nr = min(nbrs, key=lambda k: nbrs[k])
+            nr = find(nr)
+            merged = adj.get(r, {})
+            union(r, nr)
+            newr = find(r)
+            both = {}
+            for k, v in merged.items():
+                k = find(k)
+                if k != newr:
+                    both[k] = min(both.get(k, float("inf")), v)
+            for k, v in adj.get(nr, {}).items():
+                k = find(k)
+                if k != newr:
+                    both[k] = min(both.get(k, float("inf")), v)
+            adj[newr] = both
+            heapq.heappush(heap, (size[newr], newr))
+            comps -= 1
+    elif min_part_faces and min_part_faces > 0:
+        changed = True
+        while changed:
+            changed = False
+            for ang, a, b in cuts:
+                if find(a) != find(b):
+                    if size[find(a)] < min_part_faces or size[find(b)] < min_part_faces:
+                        if union(a, b):
+                            changed = True
+
+    final_roots = roots()
+    label = {}
+    out = []
+    for r in final_roots:
+        if r not in label:
+            label[r] = len(label)
+        out.append(label[r])
+    bm.free()
+    return out
+
+
+def _extract_crease_pieces(dup_obj, groups, ngroups):
+    """Create one new mesh object per crease group by copying each source face
+    into its group's bmesh, preserving UVs, materials, and smooth shading.
+
+    Deterministic bmesh extraction rather than edit-mode operators (which are
+    fragile about selection propagation and name reuse). Each new object keeps
+    the source object's world transform and is linked into its collections;
+    the source object is left in place for the caller to remove.
+    """
+    import bmesh
+
+    src = bmesh.new()
+    src.from_mesh(dup_obj.data)
+    src.faces.ensure_lookup_table()
+    src_uv = [l for l in src.loops.layers.uv]
+
+    new_bms = [bmesh.new() for _ in range(ngroups)]
+    vmap = [{} for _ in range(ngroups)]
+    new_uv = []
+    for g in range(ngroups):
+        new_uv.append([l for l in new_bms[g].loops.layers.uv.new()] if src_uv else [])
+
+    for face in src.faces:
+        g = groups[face.index]
+        bm = new_bms[g]
+        nverts = []
+        for loop in face.loops:
+            sv = loop.vert.index
+            nv = vmap[g].get(sv)
+            if nv is None:
+                nv = bm.verts.new(loop.vert.co)
+                vmap[g][sv] = nv
+            nverts.append(nv)
+        try:
+            nf = bm.faces.new(nverts)
+        except Exception:
+            continue
+        nf.material_index = face.material_index
+        nf.smooth = face.smooth
+        for i, loop in enumerate(face.loops):
+            for suv, nuve in zip(src_uv, new_uv[g]):
+                nuve[nf.loops[i]].uv = suv[loop].uv
+    src.free()
+
+    pieces = []
+    mw = dup_obj.matrix_world
+    for g in range(ngroups):
+        bm = new_bms[g]
+        if not bm.faces:
+            bm.free()
+            continue
+        me = bpy.data.meshes.new(f"{dup_obj.name}_part{g}")
+        bm.to_mesh(me)
+        bm.free()
+        ob = bpy.data.objects.new(f"{dup_obj.name}_part{g}", me)
+        ob.matrix_world = mw
+        for col in dup_obj.users_collection:
+            col.objects.link(ob)
+        pieces.append(ob)
+    return pieces
+
+
+def _separate_loose(dup_obj, existing_objs):
+    """Split by loose parts after welding coincident UV-seam vertices.
+
+    Weld first: mesh.separate(LOOSE) otherwise treats every UV seam as a real
+    disconnection and chops off stray pieces of an otherwise-continuous body
+    alongside genuinely separate meshes like clothes. The threshold scales to
+    the mesh's own bbox diagonal (1e-5) -- close only exact-duplicate seam
+    verts, never fuse distinct touching parts.
+    """
+    import numpy as np
+
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    coords = np.empty(len(dup_obj.data.vertices) * 3, dtype=np.float64)
+    dup_obj.data.vertices.foreach_get("co", coords)
+    local_diagonal = float(np.linalg.norm(np.ptp(coords.reshape(-1, 3), axis=0))) if coords.size else 0.0
+    weld_dist = max(1e-12, local_diagonal * 1e-5)
+    bpy.ops.mesh.remove_doubles(threshold=weld_dist)
+    bpy.ops.mesh.separate(type='LOOSE')
+    bpy.ops.object.mode_set(mode='OBJECT')
+    return [obj for name, obj in bpy.data.objects.items() if name not in existing_objs]
+
+
+def _separate_material(dup_obj, existing_objs):
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.separate(type='MATERIAL')
+    bpy.ops.object.mode_set(mode='OBJECT')
+    return [obj for name, obj in bpy.data.objects.items() if name not in existing_objs]
+
+
+def _separate_crease(dup_obj, existing_objs, sharp_angle, target_parts, min_part_faces):
+    """Split a single fully-connected mesh along its creases (hard-surface
+    feature lines) using _crease_face_groups + bmesh extraction. Returns the
+    piece objects; removes the temporary combined source object.
+
+    With neither target_parts nor min_part_faces set, defaults to merging
+    fragments below ~2% of the face count -- empirically a handful of balanced
+    logical areas on an AI-generated hard-surface model.
+    """
+    mesh = dup_obj.data
+    total = len(mesh.polygons)
+    if not total:
+        return []
+    eff_min = min_part_faces or max(10, int(total * 0.02))
+    groups = _crease_face_groups(mesh, sharp_angle, target_parts, eff_min if not target_parts else 0)
+    ngroups = len(set(groups)) if groups else 0
+    if ngroups <= 1:
+        bpy.data.objects.remove(dup_obj, do_unlink=True)
+        return []
+    pieces = _extract_crease_pieces(dup_obj, groups, ngroups)
+    bpy.data.objects.remove(dup_obj, do_unlink=True)
+    return pieces
+
+
+_PENDING_SEPARATIONS: dict = {}
+_PENDING_SEP_COUNTER = 0
+
+
+def _stage_pending_separation(record: dict) -> str:
+    """Hold a split-only run's context for a later confirm call. Returns the
+    pending id. Session-scoped (addon reload clears it); the scene checkpoint
+    taken before the split is the durable undo, not this dict."""
+    global _PENDING_SEP_COUNTER
+    _PENDING_SEP_COUNTER += 1
+    pid = f"sep_{int(time.time() * 1000)}_{_PENDING_SEP_COUNTER}"
+    record["pending_id"] = pid
+    _PENDING_SEPARATIONS[pid] = record
+    return pid
+
+
+def _call_openrouter_vision_json(question: str, png_bytes: bytes, model: str = None) -> dict:
+    """Vision call that demands a JSON object back (response_format json_object).
+    Returns the parsed dict, or {} on any failure -- same key convention as
+    _call_openrouter_vision (OPENROUTER_API_KEY, OPENROUTER_VISION_MODEL)."""
+    import os
+    import json
+    import base64
+    import urllib.request
+    from ..config import load_env_vars
+
+    load_env_vars()
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        return {}
+
+    resolved_model = model or os.environ.get("OPENROUTER_VISION_MODEL") or OPENROUTER_DEFAULT_MODEL
+    data_uri = "data:image/png;base64," + base64.b64encode(png_bytes).decode("utf-8")
+    payload = {
+        "model": resolved_model,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": question},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                ],
+            }
+        ],
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+
+    try:
+        req = urllib.request.Request(
+            OPENROUTER_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            response_data = json.loads(resp.read().decode("utf-8"))
+        content_text = response_data["choices"][0]["message"]["content"]
+        match = re.search(r"\{.*\}", content_text, re.DOTALL)
+        return json.loads(match.group(0)) if match else json.loads(content_text)
+    except Exception as e:
+        print(f"[MCP Bridge] OpenRouter vision-JSON request failed: {e}")
+        return {}
+
+
+def _vision_split_plan(dup_obj, lang: str, vision_model: str = None, custom_prompt: str = ""):
+    """Ask a vision LLM to decide the logical areas of the working mesh.
+
+    Captures a 4-view contact sheet of the object and asks for the distinct
+    functional areas with an approximate center each, as fractions of the
+    object's bounding box:
+      x: 0 = left edge .. 1 = right edge (front view)
+      y: 0 = bottom .. 1 = top
+      z: 0 = front face .. 1 = back face
+    Those seeds drive the geometric cut -- the model decides WHAT the parts
+    are and roughly WHERE, the cutter executes exact boundaries.
+
+    Returns (parts, error): parts is a list of {"name", "category", "center"}
+    with center a 3-list of floats, or (None, message) on failure.
+    """
+    import os
+    from ..config import load_env_vars
+    from .vision_feedback_ops import CaptureMultiviewAuditTool
+
+    load_env_vars()
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        return None, "Vision split needs OPENROUTER_API_KEY, which is not set."
+
+    cap = CaptureMultiviewAuditTool().execute({"target_object": dup_obj.name, "include_base64": False})
+    if not cap.get("success"):
+        return None, f"Vision split could not render the object: {cap.get('message', 'capture failed')}"
+    frame_path = cap.get("output_filepath")
+    try:
+        with open(frame_path, "rb") as f:
+            png_bytes = f.read()
+    except Exception as e:
+        return None, f"Vision split could not read the capture: {e}"
+    if not png_bytes:
+        return None, "Vision split capture came back empty."
+
+    lang_name = LANG_DISPLAY_NAMES.get(lang, lang)
+    question = (
+        "You are segmenting a 3D model so it can be cut into separate objects. The image is a 4-view "
+        "contact sheet (Perspective, Front, Right, Top) of ONE object. List its distinct functional/logical "
+        "areas (for example door, roof, tower, wheel, handle -- whatever this object actually has). "
+        "Reply with ONLY a JSON object of this exact shape, no markdown, no commentary:\n"
+        '{"parts": [{"name": "Door", "category": "Doors", "center": [0.2, 0.4, 0.1]}, ...]}\n'
+        "Rules: 2 to 12 parts. 'name' is the part in "
+        f"{lang_name} (one or two words, capitalized). 'category' groups similar parts (doors share one "
+        "category). 'center' is the part's approximate center as fractions of the object's bounding box: "
+        "x: 0 = left edge, 1 = right edge (front view); y: 0 = bottom, 1 = top; z: 0 = front face, 1 = back face."
+    )
+    if custom_prompt.strip():
+        question += f" User instructions (follow carefully): {custom_prompt.strip()}"
+
+    data = _call_openrouter_vision_json(question, png_bytes, vision_model)
+    raw_parts = data.get("parts") if isinstance(data, dict) else None
+    if not isinstance(raw_parts, list) or not raw_parts:
+        return None, "Vision model did not return a usable parts list."
+    if len(raw_parts) > 24:
+        return None, f"Vision model proposed {len(raw_parts)} parts (max 24) -- retry with a narrower custom_prompt."
+
+    parts = []
+    for entry in raw_parts:
+        if not isinstance(entry, dict):
+            continue
+        name = _sanitize_vision_name(str(entry.get("name") or ""))
+        category = _sanitize_vision_name(str(entry.get("category") or "")) or name
+        center = entry.get("center")
+        if not name or not isinstance(center, (list, tuple)) or len(center) != 3:
+            continue
+        try:
+            frac = [min(1.0, max(0.0, float(c))) for c in center]
+        except (TypeError, ValueError):
+            continue
+        if not all(v == v for v in frac):
+            continue
+        parts.append({"name": name, "category": category, "center": frac})
+    if len(parts) < 1:
+        return None, "Vision model returned no valid parts (need name + 3-number center each)."
+    # De-duplicate names so every part object gets a distinct micro name.
+    seen = {}
+    for p in parts:
+        base = p["name"]
+        seen[base] = seen.get(base, 0) + 1
+        if seen[base] > 1:
+            p["name"] = f"{base}_{seen[base]}"
+    return parts, None
+
+
+def _assign_faces_to_vision_seeds(mesh, seeds_local, min_part_faces):
+    """Partition mesh faces by nearest vision seed, then split each label into
+    connected components and merge fragments below min_part_faces into a
+    neighbouring component. Returns a per-face group id list."""
+    import bmesh
+
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    bm.faces.ensure_lookup_table()
+    bm.faces.index_update()
+    n = len(bm.faces)
+    if not n:
+        bm.free()
+        return []
+
+    centers = [f.calc_center_median() for f in bm.faces]
+    labels = []
+    for c in centers:
+        best, best_d = 0, None
+        for i, s in enumerate(seeds_local):
+            d = (c[0] - s[0]) ** 2 + (c[1] - s[1]) ** 2 + (c[2] - s[2]) ** 2
+            if best_d is None or d < best_d:
+                best, best_d = i, d
+        labels.append(best)
+
+    parent = list(range(n))
+    size = [1] * n
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return ra
+        if size[ra] < size[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        size[ra] += size[rb]
+        return ra
+
+    for e in bm.edges:
+        lf = e.link_faces
+        for i in range(1, len(lf)):
+            if labels[lf[0].index] == labels[lf[i].index]:
+                union(lf[0].index, lf[i].index)
+
+    if min_part_faces and min_part_faces > 0:
+        changed = True
+        while changed:
+            changed = False
+            for e in bm.edges:
+                lf = e.link_faces
+                for i in range(1, len(lf)):
+                    a, b = lf[0].index, lf[i].index
+                    if find(a) != find(b):
+                        if size[find(a)] < min_part_faces or size[find(b)] < min_part_faces:
+                            if union(a, b):
+                                changed = True
+
+    roots = [find(i) for i in range(n)]
+    comp_label = {}
+    for i, r in enumerate(roots):
+        if r not in comp_label:
+            comp_label[r] = labels[i]
+    out_roots = sorted(set(roots))
+    # Group id per face + the vision-label index each group belongs to.
+    gid_of_root = {r: i for i, r in enumerate(out_roots)}
+    group_labels = [comp_label[r] for r in out_roots]
+    bm.free()
+    return [gid_of_root[r] for r in roots], group_labels
+
+
+def _separate_vision(dup_obj, existing_objs, lang, vision_model, min_part_faces, custom_prompt=""):
+    """Vision-LLM-driven split: the model decides the logical areas from a
+    multiview render; geometry only executes the boundaries (border vertices
+    are duplicated along cuts). Returns (pieces, plan, error) where plan has
+    per-piece 'names' and 'categories' aligned with pieces."""
+
+    mesh = dup_obj.data
+    total = len(mesh.polygons)
+    if not total:
+        return [], None, "Vision split found an empty mesh."
+    parts, err = _vision_split_plan(dup_obj, lang, vision_model, custom_prompt)
+    if parts is None:
+        bpy.data.objects.remove(dup_obj, do_unlink=True)
+        return [], None, err
+
+    # Seeds live in local mesh space for the face assignment (same space as
+    # the bmesh face centers). Prompt fractions (x: left->right, y: bottom->top,
+    # z: front->back) map to local (X, Z, Y): local up is +Z, and the object's
+    # front faces -Y, so front = min Y.
+    xs_l = [c[0] for c in dup_obj.bound_box]
+    ys_l = [c[1] for c in dup_obj.bound_box]
+    zs_l = [c[2] for c in dup_obj.bound_box]
+    lo_l = (min(xs_l), min(ys_l), min(zs_l))
+    diag_l = (max(xs_l) - min(xs_l), max(ys_l) - min(ys_l), max(zs_l) - min(zs_l))
+    seeds_local = [
+        (lo_l[0] + p["center"][0] * diag_l[0],
+         lo_l[1] + p["center"][2] * diag_l[1],
+         lo_l[2] + p["center"][1] * diag_l[2])
+        for p in parts
+    ]
+
+    eff_min = min_part_faces or max(10, int(total * 0.02))
+    groups, group_labels = _assign_faces_to_vision_seeds(mesh, seeds_local, eff_min)
+    ngroups = len(set(groups)) if groups else 0
+    if ngroups < 1:
+        bpy.data.objects.remove(dup_obj, do_unlink=True)
+        return [], None, "Vision split produced no usable groups."
+    pieces = _extract_crease_pieces(dup_obj, groups, ngroups)
+    bpy.data.objects.remove(dup_obj, do_unlink=True)
+    if not pieces:
+        return [], None, "Vision split produced no usable groups."
+    kept = sorted({g for g in groups})
+    names = [parts[group_labels[g]]["name"] for g in kept[:len(pieces)]]
+    categories = [parts[group_labels[g]]["category"] for g in kept[:len(pieces)]]
+    return pieces, {"names": names, "categories": categories}, None
+
+
+def _classification_from_vision_plan(names, categories):
+    """Build the medium/micro classification the organize loop expects from a
+    vision split plan: one medium group per category, micro name per piece."""
+    groups: dict = {}
+    micro: dict = {}
+    for idx, (nm, cat) in enumerate(zip(names, categories)):
+        cat = cat or nm
+        groups.setdefault(cat, []).append(idx)
+        micro[str(idx)] = nm or f"Part_{idx}"
+    return {"groups": groups, "names": micro}
+
+
 class SeparateLogicalAreasTool(ToolBase):
     name = "separate_logical_areas"
     description = (
         "Analyze the selected mesh(es) -- combining multiple selected objects into one working mesh "
-        "first -- separate it into logical parts (by connectivity or materials), use an LLM to classify "
-        "and rename them into medium-level sub-assemblies and micro-level parts (e.g. Frame/Panel/Hardware "
-        "for a door, not one giant per-material blob), and organize them under parent Empties in a clean "
-        "macro (whole assembly) / medium (sub-assembly) / micro (part) hierarchy. Every separated part is "
-        "left visible; the original source object(s) are renamed with a '.bak' suffix and hidden instead "
-        "of deleted. Pass use_vision=true to also run a vision-assisted pass afterward, capping at "
-        "max_vision_renames (default 9999) objects to bound cost/time; vision_only_generic=true restricts "
-        "it to parts that fell back to a generic 'Part_N' name instead of re-naming every part. "
+        "first -- separate it into logical parts, use an LLM to classify and rename them into medium-level "
+        "sub-assemblies and micro-level parts (e.g. Frame/Panel/Hardware for a door, not one giant "
+        "per-material blob), and organize them under parent Empties in a clean macro (whole assembly) / "
+        "medium (sub-assembly) / micro (part) hierarchy. Every separated part is left visible; the original "
+        "source object(s) are renamed with a '.bak' suffix and hidden instead of deleted. Snapshots the scene "
+        "first by default (create_checkpoint=true) so each run stays separable, comparable, and restorable. "
+        "split_method chooses how the mesh is cut: 'auto' (default) tries loose parts, then material, then "
+        "the vision LLM, then a crease split; 'loose', 'material', 'crease', or 'vision' force one method. "
+        "Vision split shows the object to a vision model, which decides the logical areas and names them -- "
+        "geometry only executes the boundaries. Crease split cuts "
+        "along edges sharper than sharp_angle degrees (default 45) -- the way to break up a single "
+        "fully-connected single-material mesh like an AI-generated asset that loose/material can never "
+        "split -- and merges fragments either until target_parts groups (exact count) or until every part "
+        "reaches min_part_faces faces. Pass use_vision=true to also run a vision-assisted pass afterward, "
+        "capping at max_vision_renames (default 9999) objects to bound cost/time; vision_only_generic=true "
+        "restricts it to parts that fell back to a generic 'Part_N' name instead of re-naming every part. "
+        "Pass split_only=true to stop after the cut and stage the parts for per-part confirmation instead of "
+        "finalizing anything -- the call returns a pending_id plus the part list, the originals stay untouched, "
+        "and confirm_separated_parts resumes with only the kept parts. "
         "Reports phased progress with plain-language explanations to the viewport HUD and returns a "
         "'history' card with per-step timings."
     )
@@ -1480,10 +2020,40 @@ class SeparateLogicalAreasTool(ToolBase):
 
         custom_prompt = str(params.get("custom_prompt") or "")
         reorg_level = str(params.get("reorg_level") or "STANDARD").strip().upper()
+        split_method = str(params.get("split_method") or "auto").strip().lower()
+        sharp_angle = float(params.get("sharp_angle", 45.0))
+        target_parts = max(0, int(params.get("target_parts", 0)))
+        min_part_faces = max(0, int(params.get("min_part_faces", 0)))
+        create_checkpoint = bool(params.get("create_checkpoint", True))
+        split_only = bool(params.get("split_only", False))
+        resume_id = params.get("resume_pending_id")
+        keep_names = params.get("keep")
         use_vision = bool(params.get("use_vision", False))
         max_vision_renames = int(params.get("max_vision_renames", 9999))
         vision_model = params.get("vision_model")
         vision_only_generic = bool(params.get("vision_only_generic", False))
+
+        # Resume adopts the staged run's context; only `keep` may differ per
+        # confirmation call. Peek (don't pop yet) so a failed validation can
+        # be retried with a corrected keep list.
+        pending = None
+        if resume_id:
+            pending = _PENDING_SEPARATIONS.get(str(resume_id))
+            if pending is None:
+                return {
+                    "success": False,
+                    "message": f"Unknown or expired pending separation '{resume_id}'. Re-run separate with split_only=true to stage a new one.",
+                }
+            lang = str(pending.get("lang") or "it").strip().lower()
+            vocab = CATEGORY_TRANSLATIONS.get(lang)
+            if vocab is None:
+                vocab = CATEGORY_TRANSLATIONS["it"]
+            custom_prompt = str(pending.get("custom_prompt") or "")
+            reorg_level = str(pending.get("reorg_level") or "STANDARD").strip().upper()
+            use_vision = bool(pending.get("use_vision", False))
+            max_vision_renames = int(pending.get("max_vision_renames", 9999))
+            vision_model = pending.get("vision_model")
+            vision_only_generic = bool(pending.get("vision_only_generic", False))
 
         vision_note = None
         vision_renames: list[dict] = []
@@ -1497,94 +2067,278 @@ class SeparateLogicalAreasTool(ToolBase):
                 vision_note = "Use Vision was requested but OPENROUTER_API_KEY is not set -- classification pass only."
                 use_vision = False
 
-        target_objs = [o for o in bpy.context.selected_objects if o.type == "MESH"]
-        active_obj = bpy.context.active_object
-        if not target_objs:
-            if active_obj and active_obj.type == "MESH":
-                target_objs = [active_obj]
-            else:
-                return {"success": False, "message": "Please select at least one MESH object in the 3D viewport first."}
+        if pending is not None:
+            # Resume path: the split already happened in the split_only call.
+            # Originals were left untouched there; resolve everything from the
+            # staged record instead of the live selection.
+            target_objs = []
+            for nm in pending.get("target_names", []):
+                o = bpy.data.objects.get(nm)
+                if o is not None and o.type == "MESH":
+                    target_objs.append(o)
+            if not target_objs:
+                return {
+                    "success": False,
+                    "message": f"Pending separation '{pending.get('pending_id')}' lost its source object(s) -- they were renamed or deleted after the split. Restore the run's checkpoint and split again.",
+                }
+            anchor_obj = bpy.data.objects.get(pending.get("anchor_name") or "")
+            if anchor_obj not in target_objs:
+                anchor_obj = target_objs[0]
+            original_name = pending.get("original_name") or anchor_obj.name
+            original_collection = bpy.data.collections.get(pending.get("collection_name") or "")
+            if original_collection is None:
+                original_collection = anchor_obj.users_collection[0] if anchor_obj.users_collection else bpy.context.scene.collection
+            combined_count = int(pending.get("combined_count", len(target_objs)))
+            split_how = str(pending.get("split_how") or "")
+            checkpoint_name = pending.get("checkpoint")
 
-        anchor_obj = active_obj if active_obj in target_objs else target_objs[0]
-        original_name = anchor_obj.name
-        original_collection = anchor_obj.users_collection[0] if anchor_obj.users_collection else bpy.context.scene.collection
-        combined_count = len(target_objs)
+            wanted = list(keep_names) if isinstance(keep_names, (list, tuple)) else None
+            staged = list(pending.get("pieces", []))
+            if wanted is None:
+                wanted = list(staged)
+            wanted = [str(nm) for nm in wanted]
+            if not wanted:
+                return {"success": False, "message": "Nothing to confirm: the keep list is empty, so every part would be dropped."}
+            missing = [nm for nm in wanted if bpy.data.objects.get(nm) is None or bpy.data.objects.get(nm).type != "MESH"]
+            if missing:
+                return {
+                    "success": False,
+                    "message": f"Cannot resume: {len(missing)} confirmed part(s) no longer exist as meshes ({', '.join(missing[:5])}{'...' if len(missing) > 5 else ''}). Correct the keep list or re-split.",
+                }
+            for nm in staged:
+                if nm not in wanted:
+                    dropped = bpy.data.objects.get(nm)
+                    if dropped is not None:
+                        bpy.data.objects.remove(dropped, do_unlink=True)
+            separated_pieces = [bpy.data.objects.get(nm) for nm in wanted]
+            # Validation passed and dropped pieces are gone: consume the
+            # pending record so a double-confirm can't organize twice.
+            _PENDING_SEPARATIONS.pop(str(pending.get("pending_id")), None)
+            # Carry the vision split's naming into the organize phase, filtered
+            # down to exactly the kept pieces in kept order.
+            vision_plan = None
+            vp = pending.get("vision_plan")
+            vpn = pending.get("vision_piece_names", [])
+            if isinstance(vp, dict) and vpn:
+                order = [vpn.index(nm) for nm in wanted if nm in vpn]
+                if order:
+                    vision_plan = {
+                        "names": [vp.get("names", [""])[i] if i < len(vp.get("names", [])) else "" for i in order],
+                        "categories": [vp.get("categories", [""])[i] if i < len(vp.get("categories", [])) else "" for i in order],
+                    }
+        else:
+            target_objs = [o for o in bpy.context.selected_objects if o.type == "MESH"]
+            active_obj = bpy.context.active_object
+            if not target_objs:
+                if active_obj and active_obj.type == "MESH":
+                    target_objs = [active_obj]
+                else:
+                    return {"success": False, "message": "Please select at least one MESH object in the 3D viewport first."}
+
+            anchor_obj = active_obj if active_obj in target_objs else target_objs[0]
+            original_name = anchor_obj.name
+            original_collection = anchor_obj.users_collection[0] if anchor_obj.users_collection else bpy.context.scene.collection
+            combined_count = len(target_objs)
+            checkpoint_name = None
+            separated_pieces = []
 
         progress = _OpProgress(f"Separate '{original_name}'", hints=_SEPARATE_HINTS)
 
-        # Step 1: Duplicate (and combine, if more than one object selected)
-        progress.phase(f"Duplicating {combined_count} object(s) (original stays as hidden backup)...", 0.02, force=True)
-        if ctx is not None:
-            ctx.report(0.02, f"Duplicating {combined_count} object(s)...")
-        yield
-        existing_objs = set(bpy.data.objects.keys())
-        dup_obj = _duplicate_and_combine(target_objs, anchor_obj, original_name)
+        if pending is None:
+            # Step 0: Snapshot the scene before mutating, so each separate run is
+            # a separable, comparable, restorable copy of the work.
+            if create_checkpoint:
+                from .checkpoint_ops import CreateSceneCheckpointTool
 
-        # Step 2: Try separating by loose parts first. The separate() calls
-        # below block Blender's main thread with no cancellation -- the phase
-        # push just before them (force_redraw) is what keeps the viewport from
-        # looking hung, and the elapsed timer ticks even through the block.
-        progress.phase("Splitting mesh into parts (Blender is busy, cannot cancel)...", 0.10, force=True)
-        if ctx is not None:
-            ctx.report(0.10, "Splitting mesh into parts...")
-        yield
-        bpy.ops.object.mode_set(mode='EDIT')
-        bpy.ops.mesh.select_all(action='SELECT')
-        # Weld coincident-but-unshared vertices (e.g. UV seams on the face/hands/ears
-        # in a raw OBJ import) before separating -- otherwise mesh.separate(LOOSE)
-        # treats every seam as a real disconnection and chops off stray pieces of an
-        # otherwise-continuous body alongside genuinely separate meshes like clothes.
-        # A fixed absolute threshold breaks across scales -- a no-op on mm-scale
-        # imports, over-merging on huge ones -- so derive it from this mesh's own
-        # bbox diagonal instead, matching simplify_geometry_ops.py's _bbox_diagonal
-        # pattern. Kept tiny (1e-5 of the diagonal): the goal is only to close
-        # exact-duplicate UV-seam verts, not to fuse distinct touching parts.
-        # remove_doubles operates in mesh-local coordinates, not world units.
-        import numpy as np
-        coords = np.empty(len(dup_obj.data.vertices) * 3, dtype=np.float64)
-        dup_obj.data.vertices.foreach_get("co", coords)
-        local_diagonal = float(np.linalg.norm(np.ptp(coords.reshape(-1, 3), axis=0))) if coords.size else 0.0
-        weld_dist = max(1e-12, local_diagonal * 1e-5)
-        bpy.ops.mesh.remove_doubles(threshold=weld_dist)
-        bpy.ops.mesh.separate(type='LOOSE')
-        bpy.ops.object.mode_set(mode='OBJECT')
+                progress.phase("Snapshotting scene (this run can be compared and undone)...", 0.01, force=True)
+                if ctx is not None:
+                    ctx.report(0.01, "Snapshotting scene...")
+                yield
+                cp = CreateSceneCheckpointTool().execute(
+                    {"name": f"separate_{original_name}_{int(time.time())}"}
+                )
+                if not cp.get("success"):
+                    progress.phase("Failed: could not snapshot scene", 1.0, force=True)
+                    return {
+                        "success": False,
+                        "message": f"Aborted before mutating: {cp.get('message', 'scene snapshot failed')}",
+                        "history": progress.history_payload(),
+                    }
+                checkpoint_name = cp.get("checkpoint_name")
 
-        separated_pieces = [obj for name, obj in bpy.data.objects.items() if name not in existing_objs]
-        progress.phase(f"Split into {len(separated_pieces)} piece(s)...", 0.30)
-        if ctx is not None:
-            ctx.report(0.30, f"Split into {len(separated_pieces)} piece(s)...")
-        yield
-
-        # If only 1 piece is returned, try separating by material!
-        if len(separated_pieces) <= 1:
-            for obj in separated_pieces:
-                bpy.data.objects.remove(obj, do_unlink=True)
-
-            progress.phase("Loose split gave 1 piece, retrying by material...", 0.20, force=True)
+            # Step 1: Duplicate (and combine, if more than one object selected)
+            progress.phase(f"Duplicating {combined_count} object(s) (original stays as hidden backup)...", 0.02, force=True)
             if ctx is not None:
-                ctx.report(0.20, "Loose split gave 1 piece, retrying by material...")
+                ctx.report(0.02, f"Duplicating {combined_count} object(s)...")
             yield
             existing_objs = set(bpy.data.objects.keys())
             dup_obj = _duplicate_and_combine(target_objs, anchor_obj, original_name)
 
-            bpy.ops.object.mode_set(mode='EDIT')
-            bpy.ops.mesh.select_all(action='SELECT')
-            bpy.ops.mesh.separate(type='MATERIAL')
-            bpy.ops.object.mode_set(mode='OBJECT')
+            # Step 2: Separate. auto tries loose parts, then material, then falls
+            # back to a crease split for single fully-connected single-material
+            # meshes (e.g. AI-generated assets) that the first two can never cut.
+            # The separate() calls block Blender's main thread with no cancellation
+            # -- the phase push just before them (force_redraw) is what keeps the
+            # viewport from looking hung, and the elapsed timer ticks even through
+            # the block.
+            progress.phase("Splitting mesh into parts (Blender is busy, cannot cancel)...", 0.10, force=True)
+            if ctx is not None:
+                ctx.report(0.10, "Splitting mesh into parts...")
+            yield
 
-            separated_pieces = [obj for name, obj in bpy.data.objects.items() if name not in existing_objs]
+            def _remove_all(pieces):
+                for obj in pieces:
+                    bpy.data.objects.remove(obj, do_unlink=True)
+                return []
+
+            separated_pieces = []
+            split_how = ""
+            vision_plan = None
+            if split_method == "auto":
+                # Loose parts, then material, then the vision LLM, then creases --
+                # each fallback drops the previous single-piece result (which
+                # includes its dup) and re-duplicates so the working mesh is
+                # always a clean combined copy.
+                separated_pieces = _separate_loose(dup_obj, existing_objs)
+                split_how = "loose parts"
+                if len(separated_pieces) <= 1:
+                    separated_pieces = _remove_all(separated_pieces)
+                    progress.phase("Loose split gave 1 piece, retrying by material...", 0.20, force=True)
+                    if ctx is not None:
+                        ctx.report(0.20, "Loose split gave 1 piece, retrying by material...")
+                    yield
+                    existing_objs = set(bpy.data.objects.keys())
+                    dup_obj = _duplicate_and_combine(target_objs, anchor_obj, original_name)
+                    separated_pieces = _separate_material(dup_obj, existing_objs)
+                    split_how = "material"
+                    if len(separated_pieces) <= 1:
+                        separated_pieces = _remove_all(separated_pieces)
+                        progress.phase("Material split gave 1 piece, asking the vision model where the parts are...", 0.20, force=True)
+                        if ctx is not None:
+                            ctx.report(0.20, "Asking the vision model where the parts are...")
+                        yield
+                        existing_objs = set(bpy.data.objects.keys())
+                        dup_obj = _duplicate_and_combine(target_objs, anchor_obj, original_name)
+                        vpieces, vplan, verr = _separate_vision(
+                            dup_obj, existing_objs, lang, vision_model, min_part_faces, custom_prompt
+                        )
+                        if verr is None:
+                            separated_pieces, vision_plan = vpieces, vplan
+                            split_how = "vision LLM"
+                        else:
+                            progress.phase(f"Vision split unavailable ({verr}), retrying by creases (>{sharp_angle:g}°)...", 0.20, force=True)
+                            if ctx is not None:
+                                ctx.report(0.20, f"Vision split unavailable, retrying by creases (>{sharp_angle:g}°)...")
+                            yield
+                            existing_objs = set(bpy.data.objects.keys())
+                            dup_obj = _duplicate_and_combine(target_objs, anchor_obj, original_name)
+                            separated_pieces = _separate_crease(dup_obj, existing_objs, sharp_angle, target_parts, min_part_faces)
+                            split_how = f"crease (>{sharp_angle:g}°)"
+            elif split_method == "loose":
+                separated_pieces = _separate_loose(dup_obj, existing_objs)
+                split_how = "loose parts"
+            elif split_method == "material":
+                separated_pieces = _separate_material(dup_obj, existing_objs)
+                split_how = "material"
+            elif split_method == "crease":
+                separated_pieces = _separate_crease(dup_obj, existing_objs, sharp_angle, target_parts, min_part_faces)
+                split_how = f"crease (>{sharp_angle:g}°)"
+            elif split_method == "vision":
+                progress.phase("Asking the vision model where the parts are...", 0.20, force=True)
+                if ctx is not None:
+                    ctx.report(0.20, "Asking the vision model where the parts are...")
+                yield
+                vpieces, vplan, verr = _separate_vision(
+                    dup_obj, existing_objs, lang, vision_model, min_part_faces, custom_prompt
+                )
+                if verr is not None:
+                    progress.phase("Failed: vision split unavailable", 1.0, force=True)
+                    return {
+                        "success": False,
+                        "message": f"Vision split failed: {verr}",
+                        "checkpoint": checkpoint_name,
+                        "history": progress.history_payload(),
+                    }
+                separated_pieces, vision_plan = vpieces, vplan
+                split_how = "vision LLM"
+            else:
+                separated_pieces = _remove_all([dup_obj])
+                return {
+                    "success": False,
+                    "message": f"Unknown split_method '{split_method}'. Use auto, loose, material, crease, or vision.",
+                    "history": progress.history_payload(),
+                }
+
             progress.phase(f"Split into {len(separated_pieces)} piece(s)...", 0.30, force=True)
             if ctx is not None:
                 ctx.report(0.30, f"Split into {len(separated_pieces)} piece(s)...")
             yield
 
-        if not separated_pieces:
-            progress.phase("Failed: mesh did not separate into parts", 1.0, force=True)
-            return {
-                "success": False,
-                "message": "Failed to separate the mesh into parts.",
-                "history": progress.history_payload(),
-            }
+            if not separated_pieces:
+                progress.phase("Failed: mesh did not separate into parts", 1.0, force=True)
+                return {
+                    "success": False,
+                    "message": "Failed to separate the mesh into parts.",
+                    "checkpoint": checkpoint_name,
+                    "history": progress.history_payload(),
+                }
+
+            if split_only:
+                # Stop here: stage the run for per-part confirmation. The
+                # originals are still untouched (not hidden, not .bak yet) --
+                # nothing is classified, renamed, or organized until confirm.
+                staged_info = []
+                for idx, obj in enumerate(separated_pieces):
+                    entry = {
+                        "index": idx,
+                        "name": obj.name,
+                        "center": _piece_center(obj),
+                        "materials": _piece_materials(obj),
+                    }
+                    if vision_plan is not None and idx < len(vision_plan.get("names", [])):
+                        entry["suggested_name"] = vision_plan["names"][idx]
+                        entry["suggested_category"] = vision_plan.get("categories", [""])[idx] if idx < len(vision_plan.get("categories", [])) else ""
+                    staged_info.append(entry)
+                pid = _stage_pending_separation({
+                    "pieces": [o.name for o in separated_pieces],
+                    "target_names": [o.name for o in target_objs],
+                    "anchor_name": anchor_obj.name,
+                    "original_name": original_name,
+                    "collection_name": original_collection.name if original_collection else "",
+                    "combined_count": combined_count,
+                    "lang": lang,
+                    "custom_prompt": custom_prompt,
+                    "reorg_level": reorg_level,
+                    "use_vision": use_vision,
+                    "max_vision_renames": max_vision_renames,
+                    "vision_model": vision_model,
+                    "vision_only_generic": vision_only_generic,
+                    "split_how": split_how,
+                    "split_method": split_method,
+                    "vision_plan": vision_plan,
+                    "vision_piece_names": [o.name for o in separated_pieces],
+                    "checkpoint": checkpoint_name,
+                })
+                bpy.ops.object.select_all(action='DESELECT')
+                for obj in separated_pieces:
+                    obj.select_set(True)
+                if separated_pieces:
+                    bpy.context.view_layer.objects.active = separated_pieces[0]
+                progress.phase(f"Split into {len(separated_pieces)} piece(s) -- awaiting confirmation", 0.30, force=True)
+                history = progress.history_payload()
+                return {
+                    "success": True,
+                    "pending_confirmation": True,
+                    "pending_id": pid,
+                    "message": (
+                        f"Split '{original_name}' into {len(separated_pieces)} part(s) by {split_how}. "
+                        "Confirm which parts to keep before anything is classified, renamed, or organized."
+                    ),
+                    "parts": staged_info,
+                    "split_how": split_how,
+                    "checkpoint": checkpoint_name,
+                    "history": history,
+                }
 
         # Step 3: Gather parts metadata
         progress.phase(f"Reading {len(separated_pieces)} part(s) (position, materials)...", 0.32, force=True)
@@ -1609,16 +2363,30 @@ class SeparateLogicalAreasTool(ToolBase):
                     ctx.report(frac, f"Reading part {idx + 1}/{len(separated_pieces)}...")
                 yield
 
-        # Step 4: Call LLM to classify into medium groups + micro names.
+        # Step 4: Classify into medium groups + micro names. A vision split
+        # already named every part while cutting -- reuse that plan instead of
+        # spending a second model call. Otherwise ask the LLM text model, with
+        # the spatial-clustering heuristic as the no-key fallback.
         # The HTTP round-trip blocks with no intermediate ticks -- bookend it
         # so the bar explains the wait instead of freezing mid-gather.
-        progress.phase(f"Asking LLM to group {len(parts_info)} part(s)...", 0.42, force=True)
-        if ctx is not None:
-            ctx.report(0.42, f"Asking LLM to group {len(parts_info)} part(s)...")
-        yield
-        classification = _call_llm_classify(
-            parts_info, lang, original_name, custom_prompt=custom_prompt, reorg_level=reorg_level
-        )
+        used_llm = False
+        if vision_plan is not None:
+            progress.phase(f"Using vision split naming for {len(parts_info)} part(s)...", 0.42, force=True)
+            if ctx is not None:
+                ctx.report(0.42, f"Using vision split naming for {len(parts_info)} part(s)...")
+            yield
+            classification = _classification_from_vision_plan(
+                vision_plan.get("names", []), vision_plan.get("categories", [])
+            )
+            used_llm = True
+        else:
+            progress.phase(f"Asking LLM to group {len(parts_info)} part(s)...", 0.42, force=True)
+            if ctx is not None:
+                ctx.report(0.42, f"Asking LLM to group {len(parts_info)} part(s)...")
+            yield
+            classification = _call_llm_classify(
+                parts_info, lang, original_name, custom_prompt=custom_prompt, reorg_level=reorg_level
+            )
         # `used_llm` used to only check the two keys exist. An LLM will still
         # deviate from the requested shape (a list instead of a dict for
         # "groups" is a common one -- only json_object mode constrains the
@@ -1637,7 +2405,7 @@ class SeparateLogicalAreasTool(ToolBase):
         # Fallback if LLM classification is empty/unavailable (no OPENROUTER_API_KEY)
         if not used_llm:
             classification = _heuristic_classify(parts_info, original_name, reorg_level=reorg_level, lang=lang)
-        how = "LLM" if used_llm else "heuristic clustering"
+        how = "vision model" if vision_plan is not None else ("LLM" if used_llm else "heuristic clustering")
         progress.phase(
             f"Grouped into {len(classification.get('groups', {}))} group(s) via {how}...",
             0.55,
@@ -1890,14 +2658,43 @@ class SeparateLogicalAreasTool(ToolBase):
             "success": True,
             "message": (
                 f"Successfully separated '{original_name}'{combined_note} into {len(separated_pieces)} parts "
-                f"across {len(report_groups)} logical groups (classified via {classifier_note})."
+                f"across {len(report_groups)} logical groups (split by {split_how}, classified via {classifier_note})."
                 f"{prompt_note}{vision_note_suffix}"
             ),
             "root_object": root_empty.name,
             "used_llm": used_llm,
             "groups": report_groups,
+            "checkpoint": checkpoint_name,
             "vision_used": use_vision,
             "vision_renames": vision_renames,
             "vision_note": vision_note,
             "history": history,
         }
+
+
+class ConfirmSeparatedPartsTool(ToolBase):
+    name = "confirm_separated_parts"
+    description = (
+        "Resume a split-only separate run: classify, rename, and organize only the confirmed parts. "
+        "Pass pending_id from a separate_logical_areas call made with split_only=true, plus keep (the list "
+        "of staged part object names to keep -- defaults to all staged parts). Dropped parts are deleted, "
+        "kept parts are classified into medium-level sub-assemblies and micro-level parts and organized "
+        "under parent Empties, and the original source object(s) are renamed with a '.bak' suffix and "
+        "hidden. Every separated object therefore needs an explicit confirmation before it is finalized."
+    )
+
+    def execute(self, params: dict) -> dict:
+        from ..bridge.jobs import NULL_CTX
+
+        return drive_to_completion(self.iter_steps(params, NULL_CTX))
+
+    def iter_steps(self, params: dict, ctx):
+        """Resume chunk: delegates to SeparateLogicalAreasTool's chunked run
+        with resume_pending_id so the classify/organize tail (including the
+        vision pass) runs with the same chunking as a one-shot call."""
+        resume_params = {
+            "resume_pending_id": params.get("pending_id"),
+            "keep": params.get("keep"),
+        }
+        result = yield from SeparateLogicalAreasTool().iter_steps(resume_params, ctx)
+        return result

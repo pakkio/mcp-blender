@@ -293,6 +293,28 @@ REORG_LEVEL_ITEMS = [
 ]
 
 
+SPLIT_METHOD_ITEMS = [
+    ("auto", "Auto (loose, material, vision, creases)", "Try loose parts, then material, then the vision LLM, then fall back to a crease split for single connected meshes", "AUTOMERGE_ON", 0),
+    ("loose", "Loose parts", "Split only by disconnected geometry", "MESH_DATA", 1),
+    ("material", "Material", "Split only by material slots", "MATERIAL", 2),
+    ("vision", "Vision LLM", "A vision model decides the logical areas from a multiview render; geometry only cuts the boundaries", "HIDE_OFF", 3),
+    ("crease", "Creases", "Cut along edges sharper than the angle below, duplicating border vertices", "EDGESEL", 4),
+]
+
+
+class MCP_SeparatePartItem(bpy.types.PropertyGroup):
+    """One staged part awaiting confirmation: checkbox + Blender-assigned name."""
+    name: bpy.props.StringProperty(name="Part")
+    keep: bpy.props.BoolProperty(name="Keep", default=True)
+
+
+# Staged confirmation state, filled by MCP_OT_separate_logical_areas when it
+# runs with require_confirmation and read back by the confirm dialog's invoke.
+# Single slot is enough: Blender's props dialogs are modal-ish and a second
+# split run simply restages.
+_SEPARATE_CONFIRM_STATE: dict = {}
+
+
 class MCP_OT_regen_names(bpy.types.Operator):
     bl_idname = "mcp_bridge.regen_names"
     bl_label = "Regenerate Names..."
@@ -483,6 +505,76 @@ class MCP_OT_regen_names(bpy.types.Operator):
                 context.window.cursor_modal_restore()
 
 
+class MCP_OT_confirm_separated_parts(bpy.types.Operator):
+    bl_idname = "mcp_bridge.confirm_separated_parts"
+    bl_label = "Confirm Separated Parts"
+    bl_description = (
+        "Review every separated object from the staged split (keep/drop each one) "
+        "and only then classify, rename, and organize the kept parts"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    pending_id: bpy.props.StringProperty(name="Pending ID", default="")
+    parts: bpy.props.CollectionProperty(type=MCP_SeparatePartItem)
+
+    def invoke(self, context, event):
+        state = _SEPARATE_CONFIRM_STATE
+        if not state.get("pending_id") or not state.get("parts"):
+            self.report({"ERROR"}, "No staged separation to confirm -- run Separate first.")
+            return {"CANCELLED"}
+        self.pending_id = state["pending_id"]
+        raw_names = [str(p.get("name", "")) for p in state["parts"]]
+        state["raw_names"] = raw_names
+        self.parts.clear()
+        for p in state["parts"]:
+            item = self.parts.add()
+            name = str(p.get("name", ""))
+            suggested = str(p.get("suggested_name") or "")
+            item.name = f"{name}  ->  {suggested}" if suggested and suggested != name else name
+            item.keep = True
+        return context.window_manager.invoke_props_dialog(self, width=420)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="Keep or drop each separated object:", icon="CHECKMARK")
+        box = layout.box()
+        for item in self.parts:
+            row = box.row()
+            row.prop(item, "keep", text="")
+            row.label(text=item.name)
+        layout.label(text="Dropped parts are deleted; kept parts are organized.", icon="INFO")
+
+    def execute(self, context):
+        raw = list(_SEPARATE_CONFIRM_STATE.get("raw_names", []))
+        keep = [raw[i] for i, item in enumerate(self.parts) if item.keep and i < len(raw)]
+        if not keep:
+            self.report({"ERROR"}, "Nothing kept -- every part would be dropped.")
+            return {"CANCELLED"}
+        if context.window:
+            context.window.cursor_modal_set("WAIT")
+        try:
+            result = TOOL_REGISTRY["confirm_separated_parts"].execute(
+                {"pending_id": self.pending_id, "keep": keep}
+            )
+            if not result.get("success"):
+                self.report({"ERROR"}, result.get("message", "Confirm failed"))
+                return {"CANCELLED"}
+            _SEPARATE_CONFIRM_STATE.clear()
+            self.report({"INFO"}, result["message"])
+            MCP_OT_show_separate_result._result = result
+            try:
+                bpy.ops.mcp_bridge.show_separate_result("INVOKE_DEFAULT")
+            except RuntimeError:
+                pass
+            return {"FINISHED"}
+        finally:
+            if context.window:
+                try:
+                    context.window.cursor_modal_restore()
+                except Exception:
+                    pass
+
+
 class MCP_OT_show_separate_result(bpy.types.Operator):
     bl_idname = "mcp_bridge.show_separate_result"
     bl_label = "Separation Result"
@@ -530,10 +622,11 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
     bl_label = "Separate in Logical Areas..."
     bl_description = (
         "Analyze the selected mesh(es) -- combining multiple selected objects into one working mesh first -- "
-        "separate into logical parts (loose parts or materials), and organize them under parent Empties as "
-        "macro/medium/micro areas using semantic classification (LLM via OPENROUTER_API_KEY in .env). Every "
-        "separated part stays visible; the original source is renamed with a '.bak' suffix and hidden instead "
-        "of deleted."
+        "separate into logical parts (loose parts, materials, or creases), and organize them under parent "
+        "Empties as macro/medium/micro areas using semantic classification (LLM via OPENROUTER_API_KEY in "
+        ".env). The crease cutter accepts duplicated border vertices to break up a single connected mesh. "
+        "Every separated part stays visible; the original source is renamed with a '.bak' suffix and hidden "
+        "instead of deleted."
     )
     bl_options = {"REGISTER", "UNDO"}
 
@@ -558,6 +651,49 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
             "their own group', 'ignore screws') -- only applies when OPENROUTER_API_KEY is configured"
         ),
         default="",
+    )
+
+    split_method: bpy.props.EnumProperty(
+        name="Split Method",
+        description="How the cutter breaks the working mesh into parts",
+        items=SPLIT_METHOD_ITEMS,
+        default="auto",
+    )
+
+    sharp_angle: bpy.props.FloatProperty(
+        name="Crease Angle",
+        description="Cut along edges sharper than this dihedral angle in degrees (auto fallback and crease method)",
+        default=45.0,
+        min=1.0,
+        max=179.0,
+    )
+
+    target_parts: bpy.props.IntProperty(
+        name="Target Parts",
+        description="Merge crease fragments until this many parts (0 = off; min_part_faces is used instead)",
+        default=0,
+        min=0,
+        max=100000,
+    )
+
+    min_part_faces: bpy.props.IntProperty(
+        name="Min Part Faces",
+        description="Merge crease fragments until every part reaches this many faces (0 = about 2% of faces)",
+        default=0,
+        min=0,
+        max=100000000,
+    )
+
+    create_checkpoint: bpy.props.BoolProperty(
+        name="Snapshot Before Separate",
+        description="Save a scene checkpoint first so each separate run stays comparable and restorable",
+        default=True,
+    )
+
+    require_confirmation: bpy.props.BoolProperty(
+        name="Confirm Every Part",
+        description="Stop after the cut and confirm each separated object (keep/drop) before anything is classified, renamed, or organized",
+        default=True,
     )
 
     use_vision: bpy.props.BoolProperty(
@@ -620,6 +756,13 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
         box_opt = layout.box()
         box_opt.prop(self, "reorg_level")
         box_opt.prop(self, "custom_prompt", icon="TEXT")
+        box_opt.prop(self, "split_method")
+        if self.split_method in {"auto", "crease"}:
+            box_opt.prop(self, "sharp_angle")
+            box_opt.prop(self, "target_parts")
+            box_opt.prop(self, "min_part_faces")
+        box_opt.prop(self, "create_checkpoint")
+        box_opt.prop(self, "require_confirmation")
 
         layout.separator()
         box_vision = layout.box()
@@ -633,6 +776,12 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
             "lang": self.lang,
             "reorg_level": self.reorg_level,
             "custom_prompt": self.custom_prompt,
+            "split_method": self.split_method,
+            "sharp_angle": self.sharp_angle,
+            "target_parts": self.target_parts,
+            "min_part_faces": self.min_part_faces,
+            "create_checkpoint": self.create_checkpoint,
+            "split_only": bool(self.require_confirmation),
             "use_vision": self.use_vision,
             "max_vision_renames": self.max_vision_renames,
             "vision_only_generic": self.vision_only_generic,
@@ -645,6 +794,23 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
             if not result.get("success"):
                 self.report({"ERROR"}, result.get("message", "Separation failed"))
                 return {"CANCELLED"}
+
+            if result.get("pending_confirmation"):
+                # Stage the per-part confirmation dialog: nothing is classified
+                # or organized yet, so the user reviews every separated object
+                # first. The staged pieces are already selected in the viewport.
+                _SEPARATE_CONFIRM_STATE.clear()
+                _SEPARATE_CONFIRM_STATE.update({
+                    "pending_id": result.get("pending_id"),
+                    "parts": result.get("parts", []),
+                    "message": result.get("message", ""),
+                })
+                self.report({"INFO"}, result.get("message", "Split staged -- confirm parts"))
+                try:
+                    bpy.ops.mcp_bridge.confirm_separated_parts("INVOKE_DEFAULT")
+                except RuntimeError:
+                    pass
+                return {"FINISHED"}
 
             self.report({"INFO"}, result["message"])
             MCP_OT_show_separate_result._result = result
@@ -2372,6 +2538,7 @@ class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
 
 
 CLASSES = (
+    MCP_SeparatePartItem,
     MCP_OT_show_env_info,
     MCP_OT_super_import,
     MCP_OT_paste_image,
@@ -2383,6 +2550,7 @@ CLASSES = (
     MCP_OT_show_rename_result,
     MCP_OT_regen_names,
     MCP_OT_show_separate_result,
+    MCP_OT_confirm_separated_parts,
     MCP_OT_separate_logical_areas,
     MCP_OT_verify_tools,
     MCP_OT_abort_job,

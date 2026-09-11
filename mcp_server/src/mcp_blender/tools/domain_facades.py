@@ -20,7 +20,7 @@ from .asset_source_ops import register_asset_source_tools
 from .bridge_status_ops import register_bridge_status_tools
 from .env_info_ops import register_env_info_tools
 from .execute_python import register_execute_blender_python_tool
-from .localization_ops import register_localization_tools
+from .localization_ops import register_localization_tools, register_separation_confirm_tool
 from .simplify_geometry_ops import register_simplify_geometry_tools
 from .vision_eval_ops import register_vision_eval_tools
 
@@ -256,6 +256,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
             "modifier",
             "origin_cursor",
             "separate_logical_areas",
+            "confirm_separated_parts",
         ],
         params: Optional[dict[str, Any]] = None,
     ) -> dict:
@@ -266,10 +267,21 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
                 lang=p.get("lang", "it"),
                 reorg_level=p.get("reorg_level", "STANDARD"),
                 custom_prompt=p.get("custom_prompt", ""),
+                split_method=p.get("split_method", "auto"),
+                sharp_angle=p.get("sharp_angle", 45.0),
+                target_parts=p.get("target_parts", 0),
+                min_part_faces=p.get("min_part_faces", 0),
+                create_checkpoint=p.get("create_checkpoint", True),
+                split_only=p.get("split_only", False),
                 use_vision=p.get("use_vision", False),
                 max_vision_renames=p.get("max_vision_renames", 9999),
                 vision_model=p.get("vision_model"),
                 vision_only_generic=p.get("vision_only_generic", False),
+            )
+        if action == "confirm_separated_parts":
+            return await confirm_separated_parts_tool(
+                pending_id=p.get("pending_id", ""),
+                keep=p.get("keep", []),
             )
         method_map = {
             "create": "create_object",
@@ -502,6 +514,7 @@ def register_domain_facades(mcp: FastMCP, bridge: BlenderBridge) -> None:
     # literal `regen("it")`-style call this was asked for is worth a direct
     # top-level tool, not just a nested action.
     regen_tool, separate_logical_areas_tool = register_localization_tools(mcp, bridge)
+    confirm_separated_parts_tool = register_separation_confirm_tool(mcp, bridge)
 
     # 6. Rigging, Hair Curves & Animation
     @mcp.tool(

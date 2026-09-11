@@ -50,6 +50,12 @@ class SeparateLogicalAreasParams(BaseModel):
     lang: Literal["it", "en", "hu", "fr", "de", "es"] = "it"
     reorg_level: Literal["LIGHT", "STANDARD", "DEEP"] = "STANDARD"
     custom_prompt: str = ""
+    split_method: Literal["auto", "loose", "material", "crease", "vision"] = "auto"
+    sharp_angle: float = 45.0
+    target_parts: int = Field(default=0, ge=0, le=100000)
+    min_part_faces: int = Field(default=0, ge=0, le=100000000)
+    create_checkpoint: bool = True
+    split_only: bool = False
     use_vision: bool = False
     max_vision_renames: int = Field(default=_DEFAULT_MAX_VISION_RENAMES, ge=0, le=9999)
     vision_model: Optional[str] = None
@@ -210,17 +216,30 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
         name="separate_logical_areas",
         description=(
             "Combine the given mesh object(s) into one working mesh, separate it into logical parts "
-            "(by connectivity or materials), use an LLM to classify and rename them into medium-level "
-            "sub-assemblies and micro-level parts (e.g. Frame/Panel/Hardware for a door, not one giant "
-            "per-material blob), and organize them under parent Empties in a clean macro (whole "
-            "assembly) / medium (sub-assembly) / micro (part) hierarchy. Every separated part is left "
-            "visible; the original source object(s) are renamed with a '.bak' suffix and hidden instead "
-            "of deleted. Pass use_vision=true to also run a vision-assisted pass afterward, capping at "
-            "max_vision_renames (default 9999) objects to bound cost/time; vision_only_generic=true "
-            "restricts it to parts that fell back to a generic 'Part_N' name instead of re-naming every "
-            "part. lang is 'it' (default) or 'en'; reorg_level is LIGHT (coarser, fewer groups), "
-            "STANDARD (default), or DEEP (finer, more groups). Note this replaces the current viewport "
-            "selection with the given objects and does not restore it."
+            "(by connectivity, materials, or creases), use an LLM to classify and rename them into "
+            "medium-level sub-assemblies and micro-level parts (e.g. Frame/Panel/Hardware for a door, "
+            "not one giant per-material blob), and organize them under parent Empties in a clean macro "
+            "(whole assembly) / medium (sub-assembly) / micro (part) hierarchy. Every separated part is "
+            "left visible; the original source object(s) are renamed with a '.bak' suffix and hidden "
+            "instead of deleted. Snapshots the scene first by default (create_checkpoint=true) so each run "
+            "stays separable, comparable, and restorable. split_method chooses how the mesh is cut: 'auto' "
+            "(default) tries loose parts, then material, then the vision LLM, then a crease split; 'loose', "
+            "'material', 'crease', or 'vision' force one method. Vision split shows the object to a vision "
+            "model (requires OPENROUTER_API_KEY), which decides the logical areas and names them -- geometry "
+            "only executes the boundaries. Crease split cuts along edges sharper than sharp_angle degrees "
+            "(default 45) -- the way to break up a single fully-connected single-material mesh like an "
+            "AI-generated asset that loose/material can never split -- and merges fragments either until "
+            "target_parts groups (exact count) or until every part reaches min_part_faces faces. Pass "
+            "split_only=true to stop after the cut and stage the parts for per-part confirmation instead of "
+            "finalizing anything -- the call returns a pending_id plus the part list, the originals stay "
+            "untouched, and confirm_separated_parts resumes with only the kept parts. Pass use_vision=true "
+            "to also run a vision-assisted pass afterward, capping at max_vision_renames (default 9999) "
+            "to also run a vision-assisted pass afterward, capping at max_vision_renames (default 9999) "
+            "objects to bound cost/time; vision_only_generic=true restricts it to parts that fell back to "
+            "a generic 'Part_N' name instead of re-naming every part. lang is 'it' (default) or 'en'; "
+            "reorg_level is LIGHT (coarser, fewer groups), STANDARD (default), or DEEP (finer, more "
+            "groups). Note this replaces the current viewport selection with the given objects and does "
+            "not restore it."
         ),
     )
     async def separate_logical_areas(
@@ -228,6 +247,12 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
         lang: Literal["it", "en", "hu", "fr", "de", "es"] = "it",
         reorg_level: Literal["LIGHT", "STANDARD", "DEEP"] = "STANDARD",
         custom_prompt: str = "",
+        split_method: Literal["auto", "loose", "material", "crease", "vision"] = "auto",
+        sharp_angle: float = 45.0,
+        target_parts: int = 0,
+        min_part_faces: int = 0,
+        create_checkpoint: bool = True,
+        split_only: bool = False,
         use_vision: bool = False,
         max_vision_renames: int = _DEFAULT_MAX_VISION_RENAMES,
         vision_model: Optional[str] = None,
@@ -238,6 +263,12 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
             lang=lang,
             reorg_level=reorg_level,
             custom_prompt=custom_prompt,
+            split_method=split_method,
+            sharp_angle=sharp_angle,
+            target_parts=target_parts,
+            min_part_faces=min_part_faces,
+            create_checkpoint=create_checkpoint,
+            split_only=split_only,
             use_vision=use_vision,
             max_vision_renames=max_vision_renames,
             vision_model=vision_model,
@@ -268,6 +299,12 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
                 "lang": params.lang,
                 "reorg_level": params.reorg_level,
                 "custom_prompt": params.custom_prompt,
+                "split_method": params.split_method,
+                "sharp_angle": params.sharp_angle,
+                "target_parts": params.target_parts,
+                "min_part_faces": params.min_part_faces,
+                "create_checkpoint": params.create_checkpoint,
+                "split_only": params.split_only,
                 "use_vision": params.use_vision,
                 "max_vision_renames": params.max_vision_renames,
                 "vision_model": params.vision_model,
@@ -282,3 +319,40 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
         return result
 
     return regen_names, separate_logical_areas
+
+
+class ConfirmSeparatedPartsParams(BaseModel):
+    pending_id: str
+    keep: list[str] = Field(default_factory=list)
+
+
+def register_separation_confirm_tool(mcp: FastMCP, bridge: BlenderBridge):
+    @mcp.tool(
+        name="confirm_separated_parts",
+        description=(
+            "Resume a split-only separate run: classify, rename, and organize only the confirmed parts. "
+            "Pass pending_id from a separate_logical_areas call made with split_only=true, plus keep (the "
+            "list of staged part object names to keep -- empty defaults to all staged parts). Dropped parts "
+            "are deleted, kept parts are classified into medium-level sub-assemblies and micro-level parts "
+            "and organized under parent Empties, and the original source object(s) are renamed with a '.bak' "
+            "suffix and hidden. Every separated object therefore needs an explicit confirmation before it is "
+            "finalized."
+        ),
+    )
+    async def confirm_separated_parts(
+        pending_id: str,
+        keep: list[str] = Field(default_factory=list),
+    ) -> dict:
+        params = ConfirmSeparatedPartsParams(pending_id=pending_id, keep=keep)
+        result = await bridge.send_request(
+            "confirm_separated_parts",
+            {"pending_id": params.pending_id, "keep": params.keep},
+            timeout=HEAVY_REQUEST_TIMEOUT_S,
+        )
+        if not result.get("success"):
+            raise BridgeError(
+                ErrorType.TOOL_EXECUTION, result.get("message", "confirm_separated_parts failed")
+            )
+        return result
+
+    return confirm_separated_parts
