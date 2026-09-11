@@ -76,6 +76,8 @@ Four tools stay standalone even in this low-context mode rather than folding int
 
 ---
 
+Structural renaming and logical-area separation support Italian (`it`), English (`en`), Hungarian (`hu`), French (`fr`), German (`de`), and Spanish (`es`). Select the language in the Blender dialog or pass its code as `lang` through MCP.
+
 ## 🛠️ Complete Tool Catalog (144 Tools across 21 Domains)
 
 ### 1. Batch Execution & Non-Modal Progress HUD

@@ -17,6 +17,7 @@ from typing import Any
 import bpy
 
 from .base import ToolBase
+from .language_vocabularies import EXTRA_VOCABULARIES, LANG_DISPLAY_NAMES
 from ..bridge.jobs import drive_to_completion
 
 CATEGORY_TRANSLATIONS = {
@@ -244,7 +245,7 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_DEFAULT_MODEL = "google/gemini-2.5-flash"
 # Mirrors mcp_server's localization_ops.LANG_DISPLAY_NAMES -- only used to
 # turn a lang code into a display name for the vision prompt.
-LANG_DISPLAY_NAMES = {"it": "Italian", "en": "English"}
+CATEGORY_TRANSLATIONS.update(EXTRA_VOCABULARIES)
 
 _HUD_MIN_INTERVAL_S = 0.2
 
@@ -839,7 +840,7 @@ def _localize_name(name: str, vocab: dict) -> str:
 
     # Normalize technical root names
     if clean.lower() in ("rootnode", "sketchfab_model", "root_empty", "node"):
-        clean = "Modello" if vocab.get("scene") == "Scena" else "Model"
+        clean = vocab.get("model", "Modello" if vocab.get("scene") == "Scena" else "Model")
 
     parts = re.split(r"([_\-\s\.]+|\d+)", clean)
     translated = []
@@ -971,7 +972,7 @@ class RegenElementNamesTool(ToolBase):
     name = "regen_element_names"
     description = (
         "Rename scene elements (collections, Empties, selected objects, meshes, parts) into "
-        "the target language's vocabulary (default Italian 'it', or 'en'), re-link collection "
+        "the target language's vocabulary (it, en, hu, fr, de, es; default it), re-link collection "
         "children and objects in alphabetical order, and optionally (use_vision=true) run a "
         "vision-assisted pass afterward to name mesh leaves the vocabulary can't cover, capped "
         "at max_vision_renames (default 9999) objects to bound cost/time. Pass "
@@ -1326,6 +1327,13 @@ def _duplicate_and_combine(target_objs: list, anchor_obj, original_name: str):
         o.select_set(True)
     bpy.context.view_layer.objects.active = anchor_obj
     bpy.ops.object.duplicate()
+    # A duplicate inherits its parent's transform. Detach it while preserving
+    # world space before joining/reparenting, otherwise parts can jump.
+    for duplicate in list(bpy.context.selected_objects):
+        world = duplicate.matrix_world.copy()
+        duplicate.parent = None
+        duplicate.matrix_world = world
+    bpy.context.view_layer.update()
     if len(target_objs) > 1:
         bpy.ops.object.join()
     dup_obj = bpy.context.active_object
@@ -1398,60 +1406,9 @@ def _cluster_by_proximity(parts_info: list[dict], threshold_ratio: float = 0.18)
     every part sharing a material -- e.g. every wooden part across an entire
     door -- into one meaningless blob; clustering by proximity first at
     least approximates distinct physical sub-assemblies."""
-    import math
+    from .spatial_clustering import cluster_centers
 
-    n = len(parts_info)
-    if n == 0:
-        return []
-    centers = [tuple(p["center"]) for p in parts_info]
-    # Materialize as lists: generators here would be exhausted by the min()
-    # calls, making the following max() calls raise ValueError on every run.
-    xs = [c[0] for c in centers]
-    ys = [c[1] for c in centers]
-    zs = [c[2] for c in centers]
-    diag = math.dist((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
-    threshold = max(diag * threshold_ratio, 1e-6)
-
-    parent = list(range(n))
-
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a, b):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    # A raw OBJ import commonly loose-separates into thousands of pieces, and
-    # the naive all-pairs comparison below is O(n^2) -- ~4.5M math.dist calls
-    # at n=3000, freezing the UI on the main thread. Bucket centers into a grid
-    # sized to the threshold first so only points in the same or adjacent
-    # cells (guaranteed to cover every pair within `threshold`) are ever
-    # compared, which is near-linear for realistically distributed geometry.
-    cell = max(threshold, 1e-6)
-    grid: dict[tuple[int, int, int], list[int]] = {}
-    for i, c in enumerate(centers):
-        key = (int(c[0] // cell), int(c[1] // cell), int(c[2] // cell))
-        grid.setdefault(key, []).append(i)
-
-    for (cx, cy, cz), idxs in grid.items():
-        neighbor_idxs = []
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                for dz in (-1, 0, 1):
-                    neighbor_idxs.extend(grid.get((cx + dx, cy + dy, cz + dz), []))
-        for i in idxs:
-            for j in neighbor_idxs:
-                if j > i and math.dist(centers[i], centers[j]) <= threshold:
-                    union(i, j)
-
-    clusters: dict[int, list[int]] = {}
-    for i in range(n):
-        clusters.setdefault(find(i), []).append(i)
-    return list(clusters.values())
+    return cluster_centers([p["center"] for p in parts_info], threshold_ratio)
 
 
 _REORG_LEVEL_THRESHOLD_RATIO = {
@@ -1461,7 +1418,7 @@ _REORG_LEVEL_THRESHOLD_RATIO = {
 }
 
 
-def _heuristic_classify(parts_info: list[dict], original_name: str, reorg_level: str = "STANDARD") -> dict:
+def _heuristic_classify(parts_info: list[dict], original_name: str, reorg_level: str = "STANDARD", lang: str = "en") -> dict:
     """No-LLM fallback (OPENROUTER_API_KEY not set): cluster parts spatially
     into medium-level groups first, then label each group by its dominant
     material for at least some semantic signal, and give each part a
@@ -1474,11 +1431,12 @@ def _heuristic_classify(parts_info: list[dict], original_name: str, reorg_level:
     names: dict[str, str] = {}
     for c_idx, indices in enumerate(sorted(clusters, key=len, reverse=True), start=1):
         mats = [parts_info[i]["materials"][0] for i in indices if parts_info[i]["materials"]]
-        label = mats[0] if mats else "Area"
+        vocab = CATEGORY_TRANSLATIONS.get(lang, {})
+        label = mats[0] if mats else vocab.get("area", "Area")
         group_name = f"{original_name}_{label}_{c_idx}"
         groups[group_name] = indices
         for local_idx, i in enumerate(indices, start=1):
-            names[str(i)] = f"{group_name}_Part{local_idx}"
+            names[str(i)] = f"{group_name}_{vocab.get('part', 'Part')}{local_idx}"
     return {"groups": groups, "names": names}
 
 
@@ -1581,7 +1539,12 @@ class SeparateLogicalAreasTool(ToolBase):
         # bbox diagonal instead, matching simplify_geometry_ops.py's _bbox_diagonal
         # pattern. Kept tiny (1e-5 of the diagonal): the goal is only to close
         # exact-duplicate UV-seam verts, not to fuse distinct touching parts.
-        weld_dist = max(1e-6, _bbox_diagonal_world(dup_obj) * 1e-5)
+        # remove_doubles operates in mesh-local coordinates, not world units.
+        import numpy as np
+        coords = np.empty(len(dup_obj.data.vertices) * 3, dtype=np.float64)
+        dup_obj.data.vertices.foreach_get("co", coords)
+        local_diagonal = float(np.linalg.norm(np.ptp(coords.reshape(-1, 3), axis=0))) if coords.size else 0.0
+        weld_dist = max(1e-12, local_diagonal * 1e-5)
         bpy.ops.mesh.remove_doubles(threshold=weld_dist)
         bpy.ops.mesh.separate(type='LOOSE')
         bpy.ops.object.mode_set(mode='OBJECT')
@@ -1673,7 +1636,7 @@ class SeparateLogicalAreasTool(ToolBase):
 
         # Fallback if LLM classification is empty/unavailable (no OPENROUTER_API_KEY)
         if not used_llm:
-            classification = _heuristic_classify(parts_info, original_name, reorg_level=reorg_level)
+            classification = _heuristic_classify(parts_info, original_name, reorg_level=reorg_level, lang=lang)
         how = "LLM" if used_llm else "heuristic clustering"
         progress.phase(
             f"Grouped into {len(classification.get('groups', {}))} group(s) via {how}...",
@@ -1692,7 +1655,8 @@ class SeparateLogicalAreasTool(ToolBase):
         yield
         bpy.ops.object.select_all(action='DESELECT')
 
-        root_empty_name = f"{original_name}_Organizzato" if lang == "it" else f"{original_name}_Organized"
+        root_label = vocab.get("organized", "Organizzato" if lang == "it" else "Organized")
+        root_empty_name = f"{original_name}_{root_label}"
         bpy.ops.object.empty_add(type='PLAIN_AXES', location=anchor_obj.location)
         root_empty = bpy.context.active_object
         root_empty.name = root_empty_name
@@ -1726,9 +1690,11 @@ class SeparateLogicalAreasTool(ToolBase):
         assigned: set[int] = set()
 
         def _attach_piece(piece_obj, group_empty):
+            world = piece_obj.matrix_world.copy()
             piece_obj.parent = group_empty
             # Same world-space-stability reasoning as the group empty above.
             piece_obj.matrix_parent_inverse = group_empty.matrix_world.inverted()
+            piece_obj.matrix_world = world
 
         # Precompute how many parts the vision pass will actually attempt, so
         # the HUD can show real "i/total" progress instead of an unbounded
@@ -1784,7 +1750,7 @@ class SeparateLogicalAreasTool(ToolBase):
                     # Micro tier: the individual named part
                     piece_obj = separated_pieces[obj_idx]
                     was_generic = not names.get(str(obj_idx))
-                    new_name = names.get(str(obj_idx)) or f"Part_{obj_idx}"
+                    new_name = names.get(str(obj_idx)) or f"{vocab.get('part', 'Part')}_{obj_idx}"
                     piece_obj.name = new_name
                     if piece_obj.data:
                         piece_obj.data.name = new_name
@@ -1809,13 +1775,14 @@ class SeparateLogicalAreasTool(ToolBase):
 
         leftovers = [i for i in range(len(separated_pieces)) if i not in assigned]
         if leftovers:
-            misc_name = f"{original_name}_Varie" if lang == "it" else f"{original_name}_Misc"
+            misc_label = vocab.get("misc", "Varie" if lang == "it" else "Misc")
+            misc_name = f"{original_name}_{misc_label}"
             misc_empty = _make_group_empty(misc_name)
             members = []
             for obj_idx in leftovers:
                 piece_obj = separated_pieces[obj_idx]
                 was_generic = not names.get(str(obj_idx))
-                new_name = names.get(str(obj_idx)) or f"Part_{obj_idx}"
+                new_name = names.get(str(obj_idx)) or f"{vocab.get('part', 'Part')}_{obj_idx}"
                 piece_obj.name = new_name
                 if piece_obj.data:
                     piece_obj.data.name = new_name

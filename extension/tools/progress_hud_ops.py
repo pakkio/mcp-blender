@@ -5,6 +5,7 @@ import gpu
 from gpu_extras.batch import batch_for_shader
 
 from .base import ToolBase
+from .task_history import record_update
 
 # Global state for non-modal HUD
 HUD_STATE = {
@@ -426,6 +427,7 @@ def push_hud_update(
     additionally forces one real, immediate redraw+buffer-swap via
     wm.redraw_timer so the HUD actually appears on screen mid-loop.
     """
+    record_update(title, status, progress_percent, details, completed_summary, next_steps)
     _ensure_draw_handler()
 
     HUD_STATE["visible"] = show_hud

@@ -24,7 +24,8 @@ from ..vlm import VLMError, critique_image, extract_png_bytes, is_configured
 
 # Mirrors extension/tools/localization_ops.py's CATEGORY_TRANSLATIONS keys --
 # only used to turn a lang code into a display name for the vision prompt.
-LANG_DISPLAY_NAMES = {"it": "Italian", "en": "English"}
+LANG_DISPLAY_NAMES = {"it": "Italian", "en": "English", "hu": "Hungarian",
+                      "fr": "French", "de": "German", "es": "Spanish"}
 
 _DEFAULT_MAX_VISION_RENAMES = 9999
 
@@ -46,7 +47,7 @@ class SeparateLogicalAreasParams(BaseModel):
     # back to STANDARD granularity -- so a typo would otherwise "succeed" with
     # quietly wrong output. The viewport panel gets this for free from its
     # EnumProperty; over MCP the schema has to enforce it.
-    lang: Literal["it", "en"] = "it"
+    lang: Literal["it", "en", "hu", "fr", "de", "es"] = "it"
     reorg_level: Literal["LIGHT", "STANDARD", "DEEP"] = "STANDARD"
     custom_prompt: str = ""
     use_vision: bool = False
@@ -104,7 +105,7 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
         name="regen_names",
         description=(
             "Regenerate the names of a scene element's structure in a target language (default Italian, "
-            "'it'). Renames category collections/Empties via a keyword vocabulary (e.g. 'Furniture' -> "
+            "'it'; supported: it, en, hu, fr, de, es). Renames category collections/Empties via a keyword vocabulary (e.g. 'Furniture' -> "
             "'Arredamento'), keeps and reports nodes with zero objects rather than skipping them (they're "
             "scaffolds, not errors), and re-links every collection's children/objects in alphabetical order. "
             "Pass element to scope this to one collection or root-Empty instead of the whole scene. Pass "
@@ -224,7 +225,7 @@ def register_localization_tools(mcp: FastMCP, bridge: BlenderBridge):
     )
     async def separate_logical_areas(
         objects: list[str],
-        lang: Literal["it", "en"] = "it",
+        lang: Literal["it", "en", "hu", "fr", "de", "es"] = "it",
         reorg_level: Literal["LIGHT", "STANDARD", "DEEP"] = "STANDARD",
         custom_prompt: str = "",
         use_vision: bool = False,

@@ -16,6 +16,7 @@ import urllib.parse
 import bpy
 
 from ..tools import TOOL_REGISTRY
+from ..tools.language_vocabularies import LANGUAGE_ITEMS
 from .preferences import status_text_and_icon
 
 # Clipboard-to-image support for the AI Generate dialog. Priority order:
@@ -315,10 +316,7 @@ class MCP_OT_regen_names(bpy.types.Operator):
     lang: bpy.props.EnumProperty(
         name="Language",
         description="Target language vocabulary",
-        items=[
-            ("it", "Italian (Italiano)", "Localize into Italian names (e.g. Sedia, Ruota, Tavolo, Schienale)", "WORLD", 0),
-            ("en", "English (Cleanup)", "De-clutter technical suffixes and translate foreign exporter tags into clean English", "FONT_DATA", 1),
-        ],
+        items=LANGUAGE_ITEMS,
         default="it",
     )
 
@@ -542,10 +540,7 @@ class MCP_OT_separate_logical_areas(bpy.types.Operator):
     lang: bpy.props.EnumProperty(
         name="Language",
         description="Target language vocabulary",
-        items=[
-            ("it", "Italian (Italiano)", "Organize and translate names in Italian", "WORLD", 0),
-            ("en", "English", "Organize and translate names in English", "FONT_DATA", 1),
-        ],
+        items=LANGUAGE_ITEMS,
         default="it",
     )
 

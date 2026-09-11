@@ -322,7 +322,7 @@ async def test_separate_logical_areas_defaults_are_forwarded():
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"lang": "fr"},           # unsupported lang silently fell back to Italian
+        {"lang": "xx"},           # unsupported lang silently fell back to Italian
         {"reorg_level": "DEEEP"}, # unrecognized level silently fell back to STANDARD
     ],
 )
@@ -347,6 +347,16 @@ async def test_separate_logical_areas_requires_at_least_one_object():
         await separate_tool(objects=[])
 
     bridge.send_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('lang', ['hu', 'fr', 'de', 'es'])
+async def test_separate_forwards_new_languages(lang):
+    bridge = AsyncMock()
+    bridge.send_request.return_value = {'success': True, 'message': 'ok'}
+    _, separate = register_localization_tools(FakeMCP(), bridge)
+    await separate(objects=['Vehicle'], lang=lang)
+    assert bridge.send_request.await_args_list[-1].args[1]['lang'] == lang
 
 
 @pytest.mark.asyncio

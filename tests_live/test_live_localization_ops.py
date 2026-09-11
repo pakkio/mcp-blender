@@ -7,6 +7,30 @@ from tests_live.base_case import LiveBpyTestCase
 
 class TestLiveLocalizationOps(LiveBpyTestCase):
 
+    def test_added_languages_translate_offline_and_keep_accents(self):
+        from extension.tools.localization_ops import CATEGORY_TRANSLATIONS
+        from extension.tools.language_vocabularies import LANGUAGE_ITEMS
+        expected = {'hu': ('Kerekek', 'Kerék'), 'fr': ('Roues', 'Roue'),
+                    'de': ('Räder', 'Rad'), 'es': ('Ruedas', 'Rueda')}
+        for lang, (plural, singular) in expected.items():
+            with self.subTest(lang=lang):
+                self.assertIn(lang, [item[0] for item in LANGUAGE_ITEMS])
+                self.assertFalse(set(CATEGORY_TRANSLATIONS['it']) - set(CATEGORY_TRANSLATIONS[lang]))
+                collection = self._make_category('Wheels', bpy.context.scene.collection, ['Wheel_01'])
+                result = self.execute_tool('regen_element_names', {'lang': lang, 'element': collection.name})
+                self.assertTrue(result['success'], result)
+                self.assertEqual(collection.name, plural)
+                self.assertEqual(list(collection.objects)[0].name, singular + '_01')
+
+    def test_added_languages_localize_separation_fallback_names(self):
+        from extension.tools.localization_ops import _heuristic_classify
+        expected = {'hu': ('Terület', 'Alkatrész'), 'fr': ('Zone', 'Pièce'),
+                    'de': ('Bereich', 'Teil'), 'es': ('Área', 'Pieza')}
+        for lang, (area, part) in expected.items():
+            result = _heuristic_classify([{'center': [0, 0, 0], 'materials': []}], 'Vehicle', lang=lang)
+            self.assertIn(area, next(iter(result['groups'])))
+            self.assertIn(part, result['names']['0'])
+
     def _make_category(self, name, parent_collection, object_names=()):
         col = bpy.data.collections.new(name)
         parent_collection.children.link(col)
