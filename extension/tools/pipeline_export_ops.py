@@ -33,7 +33,12 @@ class ExportUnityFBXTool(ToolBase):
             "axis_up": "Y",
             "apply_unit_scale": True,
             "apply_scale_options": "FBX_SCALE_UNITS",
-            "bake_space_transform": True,
+            # bake_space_transform recursively re-applies the axis conversion at every
+            # level of a parented hierarchy instead of once at the root, corrupting
+            # multi-level rigs (e.g. wheel/steering empties under a car root end up
+            # rotated 90deg relative to their parent). axis_forward/axis_up already
+            # handle the Blender Z-up -> Unity Y-up conversion correctly on their own.
+            "bake_space_transform": False,
             "use_mesh_modifiers": apply_modifiers,
             "mesh_smooth_type": "FACE",
             "add_leaf_bones": False,  # Crucial for Unity Humanoid / Generic rigs
