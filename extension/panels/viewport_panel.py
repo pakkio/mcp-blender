@@ -2196,6 +2196,24 @@ class MCP_OT_restore_checkpoint(bpy.types.Operator):
                 context.window.cursor_modal_restore()
 
 
+def _import_generated_model(filepath: str, reduction_method: str, target_vertices: int, collection_name: str) -> dict:
+    """Shared by MCP_OT_ai_generate and MCP_OT_ai_generate_refresh_meshy: run
+    a generated GLB through the same super_import pipeline either way."""
+    collection = collection_name.strip() or "Generated/Meshy"
+    return TOOL_REGISTRY["super_import"].execute({
+        "source_type": "FILE",
+        "filepath": filepath,
+        "simplifier_tool": reduction_method.upper() if reduction_method != "none" else "NONE",
+        "target_vertices": target_vertices,
+        "auto_orient": True,
+        "normalize_scale": True,
+        "target_size": 2.0,
+        "ground_to_floor": True,
+        "center_xy": True,
+        "collection_name": collection,
+    })
+
+
 class MCP_OT_ai_generate(bpy.types.Operator):
     bl_idname = "mcp_bridge.ai_generate"
     bl_label = "AI Generate 3D Model..."
@@ -2271,6 +2289,12 @@ class MCP_OT_ai_generate(bpy.types.Operator):
     _preview_img = None
     _preview_path = None
     _preview_pending = None
+    # Set when a run ends in a MeshyTimeout: Meshy's queue was likely still
+    # working (e.g. stuck reporting 99%), so the task_id is kept here instead
+    # of discarded, letting the panel's "Refresh Meshy Status" button check
+    # the same task again rather than paying for a brand new generation.
+    _pending_resume = None
+    _cancel_event = None
 
     @classmethod
     def _release_preview(cls):
@@ -2370,8 +2394,14 @@ class MCP_OT_ai_generate(bpy.types.Operator):
         # blocking Blender's main thread for however long Meshy/Tripo take --
         # a blocking call here previously froze the whole UI, indistinguishable
         # from a crash, for as long as the AI provider took to respond.
-        from ..tools.super_import_ops import generate_ai_model_image_job, generate_ai_model_job
+        from ..tools.super_import_ops import (
+            MeshyCancelled,
+            MeshyTimeout,
+            generate_ai_model_image_job,
+            generate_ai_model_job,
+        )
 
+        type(self)._pending_resume = None
         image_file = None
         if self.source_mode == "IMAGE":
             raw = self.image_path.strip().strip('"')
@@ -2393,21 +2423,40 @@ class MCP_OT_ai_generate(bpy.types.Operator):
         # multi-million-triangle raw generation for us to reduce here. "Keep
         # original" opts out, which is exactly what it says on the tin.
         provider_budget = self.target_vertices if self.reduction_method != "none" else None
-        self._job = {"done": False, "error": None, "path": None, "credits": None, "status": "Starting..."}
+        self._job = {
+            "done": False, "error": None, "path": None, "credits": None, "status": "Starting...",
+            "task_id": None, "label": None,
+        }
+        # Set from the ESC handler so the poll loop notices within one tick
+        # (~3s) instead of idling out its full multi-minute deadline after
+        # the UI has already moved on.
+        self._cancel_event = threading.Event()
 
         def worker(job):
             def on_status(text):
                 job["status"] = text
 
+            def on_task(task_id, label):
+                job["task_id"] = task_id
+                job["label"] = label
+
             try:
                 if image_file is not None:
                     path, credits = generate_ai_model_image_job(
-                        provider, str(image_file), status_cb=on_status, target_vertices=provider_budget
+                        provider, str(image_file), status_cb=on_status, target_vertices=provider_budget,
+                        on_task=on_task, cancel_event=self._cancel_event,
                     )
                 else:
-                    path, credits = generate_ai_model_job(provider, prompt, status_cb=on_status)
+                    path, credits = generate_ai_model_job(
+                        provider, prompt, status_cb=on_status, on_task=on_task, cancel_event=self._cancel_event
+                    )
                 job["path"] = path
                 job["credits"] = credits
+            except MeshyCancelled:
+                job["error"] = None  # ESC already reported this; nothing left to surface
+            except MeshyTimeout as exc:
+                job["error"] = str(exc)
+                job["resume"] = {"task_id": exc.task_id, "label": exc.label, "prompt": prompt}
             except Exception as exc:
                 job["error"] = str(exc)
             finally:
@@ -2424,8 +2473,17 @@ class MCP_OT_ai_generate(bpy.types.Operator):
 
     def modal(self, context, event):
         if event.type == "ESC":
+            task_id = self._job.get("task_id") if self._job else None
+            label = self._job.get("label") if self._job else None
+            if self._cancel_event:
+                self._cancel_event.set()  # stops the background poll within ~1 tick
             self._cleanup(context)
-            self.report({"WARNING"}, "AI generation cancelled (any in-flight request may still finish on the provider's side)")
+            if task_id:
+                from ..tools.super_import_ops import cancel_meshy_task
+                threading.Thread(target=cancel_meshy_task, args=(task_id, label), daemon=True).start()
+                self.report({"WARNING"}, "AI generation cancelled -- telling Meshy to stop the running task too")
+            else:
+                self.report({"WARNING"}, "AI generation cancelled (no task submitted to Meshy yet)")
             return {"CANCELLED"}
 
         if event.type != "TIMER":
@@ -2441,22 +2499,26 @@ class MCP_OT_ai_generate(bpy.types.Operator):
         self._cleanup(context)
 
         if job["error"]:
-            self.report({"ERROR"}, job["error"])
+            resume = job.get("resume")
+            if resume:
+                type(self)._pending_resume = {
+                    **resume,
+                    "reduction_method": self.reduction_method,
+                    "target_vertices": self.target_vertices,
+                    "collection_name": self.collection_name,
+                }
+                self.report(
+                    {"ERROR"},
+                    job["error"] + " -- Meshy may still be working on it; use the "
+                    "'Refresh Meshy Status' button in the MCP Bridge panel to check again "
+                    "without starting a new generation.",
+                )
+            else:
+                self.report({"ERROR"}, job["error"])
             return {"CANCELLED"}
 
         collection = self.collection_name.strip() or f"Generated/{self.provider.capitalize()}"
-        result = TOOL_REGISTRY["super_import"].execute({
-            "source_type": "FILE",
-            "filepath": str(job["path"]),
-            "simplifier_tool": self.reduction_method.upper() if self.reduction_method != "none" else "NONE",
-            "target_vertices": self.target_vertices,
-            "auto_orient": True,
-            "normalize_scale": True,
-            "target_size": 2.0,
-            "ground_to_floor": True,
-            "center_xy": True,
-            "collection_name": collection,
-        })
+        result = _import_generated_model(str(job["path"]), self.reduction_method, self.target_vertices, collection)
         if not result.get("success"):
             self.report({"ERROR"}, result.get("message", "Import of generated model failed"))
             return {"CANCELLED"}
@@ -2474,6 +2536,119 @@ class MCP_OT_ai_generate(bpy.types.Operator):
         type(self)._release_preview()
 
 
+class MCP_OT_ai_generate_refresh_meshy(bpy.types.Operator):
+    """Re-checks the Meshy task MCP_OT_ai_generate left pending after a
+    MeshyTimeout, instead of the user re-running the whole (billed) generation
+    from scratch. Only shows up (see VIEW3D_PT_mcp_bridge.draw) once such a
+    pending task actually exists."""
+
+    bl_idname = "mcp_bridge.ai_generate_refresh_meshy"
+    bl_label = "Refresh Meshy Status"
+    bl_description = "Check the pending Meshy generation again instead of starting a new one"
+    bl_options = {"REGISTER", "UNDO"}
+
+    _thread = None
+    _job = None
+    _timer = None
+    _area = None
+    _cancel_event = None
+
+    def execute(self, context):
+        from ..tools.super_import_ops import MeshyCancelled, MeshyTimeout, resume_ai_model_job
+
+        pending = MCP_OT_ai_generate._pending_resume
+        if not pending:
+            self.report({"WARNING"}, "No pending Meshy generation to refresh")
+            return {"CANCELLED"}
+
+        self._job = {"done": False, "error": None, "path": None, "status": "Checking Meshy...", "resume": None}
+        # Esc here only stops *watching* -- it deliberately does NOT call
+        # cancel_meshy_task, unlike MCP_OT_ai_generate's Esc: the whole point
+        # of this button is that the task survives to be re-checked later, so
+        # actually cancelling it here would defeat that.
+        self._cancel_event = threading.Event()
+
+        def worker(job):
+            def on_status(text):
+                job["status"] = text
+
+            try:
+                path, credits = resume_ai_model_job(
+                    pending["task_id"], pending["label"], pending["prompt"], status_cb=on_status,
+                    cancel_event=self._cancel_event,
+                )
+                job["path"] = path
+                job["credits"] = credits
+            except MeshyCancelled:
+                job["error"] = None
+            except MeshyTimeout as exc:
+                job["error"] = str(exc)
+                job["resume"] = {"task_id": exc.task_id, "label": exc.label, "prompt": pending["prompt"]}
+            except Exception as exc:
+                job["error"] = str(exc)
+            finally:
+                job["done"] = True
+
+        self._thread = threading.Thread(target=worker, args=(self._job,), daemon=True)
+        self._thread.start()
+
+        self._area = context.area
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.25, window=context.window)
+        wm.modal_handler_add(self)
+        return {"RUNNING_MODAL"}
+
+    def modal(self, context, event):
+        if event.type == "ESC":
+            if self._cancel_event:
+                self._cancel_event.set()
+            self._cleanup(context)
+            self.report({"WARNING"}, "Refresh cancelled (the Meshy task itself keeps running server-side)")
+            return {"CANCELLED"}
+
+        if event.type != "TIMER":
+            return {"PASS_THROUGH"}
+
+        job = self._job
+        if self._area:
+            self._area.header_text_set(f"{job['status']}  (Esc to cancel)")
+
+        if not job["done"]:
+            return {"PASS_THROUGH"}
+
+        self._cleanup(context)
+
+        if job["error"]:
+            resume = job.get("resume")
+            if resume:
+                MCP_OT_ai_generate._pending_resume = {**MCP_OT_ai_generate._pending_resume, **resume}
+                self.report({"ERROR"}, job["error"] + " -- still not done; try Refresh again shortly.")
+            else:
+                MCP_OT_ai_generate._pending_resume = None
+                self.report({"ERROR"}, job["error"])
+            return {"CANCELLED"}
+
+        pending = MCP_OT_ai_generate._pending_resume
+        MCP_OT_ai_generate._pending_resume = None
+        result = _import_generated_model(
+            str(job["path"]), pending["reduction_method"], pending["target_vertices"], pending["collection_name"]
+        )
+        if not result.get("success"):
+            self.report({"ERROR"}, result.get("message", "Import of generated model failed"))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"{result['message']} | {job['credits']}")
+        return {"FINISHED"}
+
+    def _cleanup(self, context):
+        wm = context.window_manager
+        if self._timer:
+            wm.event_timer_remove(self._timer)
+            self._timer = None
+        if self._area:
+            self._area.header_text_set(None)
+            self._area = None
+
+
 class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
     bl_label = "MCP Bridge"
     bl_space_type = "VIEW_3D"
@@ -2489,6 +2664,10 @@ class VIEW3D_PT_mcp_bridge(bpy.types.Panel):
         layout.operator(MCP_OT_show_env_info.bl_idname, icon="LOCKED")
         layout.operator(MCP_OT_super_import.bl_idname, icon="IMPORT")
         layout.operator(MCP_OT_ai_generate.bl_idname, icon="SHADERFX")
+        if MCP_OT_ai_generate._pending_resume:
+            layout.operator(
+                MCP_OT_ai_generate_refresh_meshy.bl_idname, icon="FILE_REFRESH", text="Refresh Meshy Status"
+            )
         layout.operator(MCP_OT_normalize_model.bl_idname, icon="ORIENTATION_GIMBAL")
         layout.operator(MCP_OT_simplify_mesh.bl_idname, icon="MOD_DECIM")
         layout.separator()
@@ -2543,6 +2722,7 @@ CLASSES = (
     MCP_OT_super_import,
     MCP_OT_paste_image,
     MCP_OT_ai_generate,
+    MCP_OT_ai_generate_refresh_meshy,
     MCP_OT_normalize_model,
     MCP_OT_simplify_mesh,
     MCP_OT_create_checkpoint,

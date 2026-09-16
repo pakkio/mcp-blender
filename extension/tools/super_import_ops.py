@@ -11,7 +11,9 @@ import math
 import os
 import re
 import tempfile
+import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -696,13 +698,72 @@ _AI_GEN_DEADLINE_S = 480.0
 _AI_GEN_POLL_INTERVAL_S = 3.0
 
 
-def _poll_meshy_task(base_url: str, task_id: str, headers: dict, status_cb, label: str) -> dict:
+class MeshyCancelled(ValueError):
+    """Raised locally when a cancel_event fires mid-poll, so a worker thread
+    stops hammering Meshy's status endpoint the moment the user hits Esc
+    instead of idling out its full poll deadline for no reason."""
+
+
+def _delete_request(url: str, headers: dict) -> None:
+    req = urllib.request.Request(url, headers={**headers, "User-Agent": _USER_AGENT}, method="DELETE")
+    try:
+        urllib.request.urlopen(req, timeout=15).close()
+    except urllib.error.HTTPError as exc:
+        # 404 = task already finished/gone server-side, nothing to cancel.
+        if exc.code not in (200, 202, 204, 404):
+            raise
+
+
+def cancel_meshy_task(task_id: str, label: str) -> None:
+    """Best-effort: actually tell Meshy to stop a running task, rather than
+    just walking away from it client-side (which previously left it running,
+    and billing, on Meshy's servers after a Blender-side Esc). Swallows
+    failures -- this is a courtesy call made from a fire-and-forget thread
+    after the UI has already cancelled, so there's no one left to report an
+    error to and nothing further the caller can do about it."""
+    try:
+        headers = _meshy_headers()
+        base_url = (
+            "https://api.meshy.ai/v2/text-to-3d"
+            if label in ("preview", "refine")
+            else "https://api.meshy.ai/openapi/v1/image-to-3d"
+        )
+        _delete_request(f"{base_url}/{task_id}", headers)
+    except Exception:
+        pass
+
+
+class MeshyTimeout(ValueError):
+    """Meshy task didn't finish inside our wall-clock deadline. Meshy's own
+    server-side queue can genuinely sit at e.g. 99% for a long time under
+    load -- the task is usually still running there, not dead -- so this
+    carries enough (task_id/label) for a caller to resume polling the same
+    task later instead of discarding it and re-submitting (and re-billing)
+    a whole new generation."""
+
+    def __init__(self, base_url: str, task_id: str, label: str, last_status: str):
+        super().__init__(f"Meshy {label} timed out for task '{task_id}' (last status: {last_status})")
+        self.base_url = base_url
+        self.task_id = task_id
+        self.label = label
+
+
+def _poll_meshy_task(
+    base_url: str, task_id: str, headers: dict, status_cb, label: str, cancel_event=None
+) -> dict:
     """Poll a Meshy task (preview or refine share the same GET .../{id} +
-    status contract) until SUCCEEDED, bounded by its own wall-clock deadline."""
+    status contract) until SUCCEEDED, bounded by its own wall-clock deadline.
+
+    cancel_event, if given, is checked once per tick (the same 3s cadence as
+    the poll itself) so a user-triggered cancel stops this loop within one
+    tick instead of running out its full multi-minute deadline for nothing
+    once the caller has already moved on."""
     task_url = f"{base_url}/{task_id}"
     last_status = "UNKNOWN"
     deadline = time.monotonic() + _AI_GEN_DEADLINE_S
     while time.monotonic() < deadline:
+        if cancel_event is not None and cancel_event.is_set():
+            raise MeshyCancelled(f"Meshy {label} polling cancelled for task '{task_id}'")
         try:
             data = _get_json(task_url, headers)
         except Exception as exc:
@@ -717,17 +778,10 @@ def _poll_meshy_task(base_url: str, task_id: str, headers: dict, status_cb, labe
             err = (data.get("task_error") or {}).get("message") or "Unknown error"
             raise ValueError(f"Meshy {label} {last_status}: {err}")
         time.sleep(_AI_GEN_POLL_INTERVAL_S)
-    raise ValueError(f"Meshy {label} timed out for task '{task_id}' (last status: {last_status})")
+    raise MeshyTimeout(base_url, task_id, label, last_status)
 
 
-def _generate_meshy_model(prompt: str, dest_dir: Path, status_cb=None, texture: bool = True) -> tuple[Path, str]:
-    """Text-to-3D via Meshy AI: create a preview (untextured geometry) task,
-    poll it, then -- since texture=True by default -- submit and poll a
-    'refine' task against it to bake PBR textures (Meshy has no single-call
-    textured mode) before downloading the final GLB. Pure network/file I/O,
-    no bpy calls -- safe to run on a background thread; status_cb(str), if
-    given, is called on every poll tick so a caller polling from Blender's
-    main thread can show live progress without blocking on this."""
+def _meshy_headers() -> dict:
     from ..config import load_env_vars
     load_env_vars()
     token = os.environ.get("MESHY_API_KEY")
@@ -736,8 +790,42 @@ def _generate_meshy_model(prompt: str, dest_dir: Path, status_cb=None, texture: 
             "Meshy AI generation requires a free MESHY_API_KEY. "
             "Get one at https://www.meshy.ai/api and add it to your .env file."
         )
+    return {"Authorization": f"Bearer {token}"}
 
-    headers = {"Authorization": f"Bearer {token}"}
+
+def _download_meshy_result(data: dict, task_id: str, dest_dir: Path, status_cb) -> Path:
+    model_url = data.get("model_urls", {}).get("glb") or data.get("model_url")
+    if not model_url:
+        raise ValueError(f"Meshy task '{task_id}' succeeded but returned no downloadable model URL")
+    if status_cb:
+        status_cb("Meshy: downloading generated model...")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_file = dest_dir / "model.glb"
+    _download_url(model_url, dest_file)
+    return dest_file
+
+
+def _generate_meshy_model(
+    prompt: str, dest_dir: Path, status_cb=None, texture: bool = True, on_task=None, cancel_event=None
+) -> tuple[Path, str]:
+    """Text-to-3D via Meshy AI: create a preview (untextured geometry) task,
+    poll it, then -- since texture=True by default -- submit and poll a
+    'refine' task against it to bake PBR textures (Meshy has no single-call
+    textured mode) before downloading the final GLB. Pure network/file I/O,
+    no bpy calls -- safe to run on a background thread; status_cb(str), if
+    given, is called on every poll tick so a caller polling from Blender's
+    main thread can show live progress without blocking on this.
+
+    on_task(task_id, label), if given, fires as soon as each task_id is known
+    -- before the caller has a "SUCCEEDED" result -- so it can be cancelled
+    (see cancel_meshy_task) while still in flight. cancel_event, if given, is
+    checked by the underlying poll and raises MeshyCancelled promptly instead
+    of running out the full poll deadline.
+
+    If a poll hits its wall-clock deadline (MeshyTimeout), the task is often
+    still running server-side -- resume_meshy_model_job can pick the same
+    task_id back up later instead of burning a fresh generation."""
+    headers = _meshy_headers()
     base_url = "https://api.meshy.ai/v2/text-to-3d"
     if status_cb:
         status_cb(f"Meshy: submitting prompt '{prompt}'...")
@@ -748,8 +836,10 @@ def _generate_meshy_model(prompt: str, dest_dir: Path, status_cb=None, texture: 
     task_id = created.get("result")
     if not task_id:
         raise ValueError(f"No task ID returned by Meshy: {created}")
+    if on_task:
+        on_task(task_id, "preview")
 
-    data = _poll_meshy_task(base_url, task_id, headers, status_cb, "preview")
+    data = _poll_meshy_task(base_url, task_id, headers, status_cb, "preview", cancel_event=cancel_event)
 
     if texture:
         try:
@@ -759,18 +849,44 @@ def _generate_meshy_model(prompt: str, dest_dir: Path, status_cb=None, texture: 
         refine_task_id = refined.get("result")
         if not refine_task_id:
             raise ValueError(f"No refine task ID returned by Meshy: {refined}")
-        data = _poll_meshy_task(base_url, refine_task_id, headers, status_cb, "refine")
+        task_id = refine_task_id
+        if on_task:
+            on_task(task_id, "refine")
+        data = _poll_meshy_task(base_url, refine_task_id, headers, status_cb, "refine", cancel_event=cancel_event)
 
-    model_url = data.get("model_urls", {}).get("glb") or data.get("model_url")
-    if not model_url:
-        raise ValueError(f"Meshy task '{task_id}' succeeded but returned no downloadable model URL")
-
-    if status_cb:
-        status_cb("Meshy: downloading generated model...")
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest_file = dest_dir / "model.glb"
-    _download_url(model_url, dest_file)
+    dest_file = _download_meshy_result(data, task_id, dest_dir, status_cb)
     return dest_file, f"Meshy AI ('{prompt}')"
+
+
+def resume_meshy_model_job(
+    task_id: str, label: str, dest_dir: Path, status_cb=None, texture: bool = True, on_task=None, cancel_event=None
+) -> tuple[Path, str]:
+    """Pick a Meshy job back up after a MeshyTimeout instead of re-submitting
+    (and re-billing) a whole new generation: re-poll the same task_id from
+    where it left off, then continue the pipeline (preview -> refine ->
+    download) exactly as a fresh run would."""
+    headers = _meshy_headers()
+    base_url = "https://api.meshy.ai/v2/text-to-3d"
+    if on_task:
+        on_task(task_id, label)
+
+    data = _poll_meshy_task(base_url, task_id, headers, status_cb, label, cancel_event=cancel_event)
+
+    if label == "preview" and texture:
+        try:
+            refined = _post_json(base_url, headers, {"mode": "refine", "preview_task_id": task_id})
+        except Exception as exc:
+            raise ValueError(f"Meshy refine (texturing) task creation failed: {exc}") from exc
+        refine_task_id = refined.get("result")
+        if not refine_task_id:
+            raise ValueError(f"No refine task ID returned by Meshy: {refined}")
+        task_id = refine_task_id
+        if on_task:
+            on_task(task_id, "refine")
+        data = _poll_meshy_task(base_url, refine_task_id, headers, status_cb, "refine", cancel_event=cancel_event)
+
+    dest_file = _download_meshy_result(data, task_id, dest_dir, status_cb)
+    return dest_file, "Meshy AI (resumed)"
 
 
 def _generate_tripo_model(prompt: str, dest_dir: Path, status_cb=None) -> tuple[Path, str]:
@@ -808,20 +924,34 @@ def _generate_tripo_model(prompt: str, dest_dir: Path, status_cb=None) -> tuple[
     return dest_file, f"Tripo3D ('{prompt}')"
 
 
-def generate_ai_model_job(provider: str, prompt: str, status_cb=None) -> tuple[Path, str]:
+def generate_ai_model_job(provider: str, prompt: str, status_cb=None, on_task=None, cancel_event=None) -> tuple[Path, str]:
     """Shared entry point for MESHY/TRIPO text-to-3D generation. Pure network
     I/O -- no bpy calls -- so callers that care about not freezing Blender's
     UI (e.g. the viewport panel's AI Generate button) can run this on a
     background thread and poll status_cb's output from a bpy.app.timers/modal
-    tick instead of blocking the main thread for the whole generation."""
+    tick instead of blocking the main thread for the whole generation.
+
+    on_task/cancel_event are Meshy-only (see _generate_meshy_model) -- Tripo3D
+    has no cancel endpoint wired up here, so they're accepted but ignored for
+    that provider rather than making callers branch on it."""
     provider = provider.upper()
     cache_key = f"{provider.lower()}_prompt_{prompt.replace(' ', '_')[:40]}"
     cache_dir = Path(tempfile.gettempdir()) / "mcp_blender_assets" / provider.lower() / cache_key
     if provider == "MESHY":
-        return _generate_meshy_model(prompt, cache_dir, status_cb=status_cb)
+        return _generate_meshy_model(prompt, cache_dir, status_cb=status_cb, on_task=on_task, cancel_event=cancel_event)
     if provider == "TRIPO":
         return _generate_tripo_model(prompt, cache_dir, status_cb=status_cb)
     raise ValueError(f"Unknown AI provider '{provider}' (expected MESHY or TRIPO)")
+
+
+def resume_ai_model_job(task_id: str, label: str, prompt: str, status_cb=None, on_task=None, cancel_event=None) -> tuple[Path, str]:
+    """Companion to generate_ai_model_job for the MeshyTimeout case: re-poll
+    the task Meshy was still chewing on instead of starting over. Uses the
+    same cache_dir derivation as generate_ai_model_job so a resumed job lands
+    (and caches) exactly where the original run would have."""
+    cache_key = f"meshy_prompt_{prompt.replace(' ', '_')[:40]}"
+    cache_dir = Path(tempfile.gettempdir()) / "mcp_blender_assets" / "meshy" / cache_key
+    return resume_meshy_model_job(task_id, label, cache_dir, status_cb=status_cb, on_task=on_task, cancel_event=cancel_event)
 
 
 # Image-to-3D: same threading contract as the text path above. The source
@@ -887,7 +1017,9 @@ def _image_job_cache_dir(provider: str, image_path_str: str, polycount=None) -> 
     return Path(tempfile.gettempdir()) / "mcp_blender_assets" / provider.lower() / f"img_{digest}{suffix}"
 
 
-def generate_ai_model_image_job(provider: str, image_path: str, status_cb=None, target_vertices=None) -> tuple[Path, str]:
+def generate_ai_model_image_job(
+    provider: str, image_path: str, status_cb=None, target_vertices=None, on_task=None, cancel_event=None
+) -> tuple[Path, str]:
     """Shared entry point for MESHY/TRIPO image-to-3D generation. Same pure
     network-I/O contract as generate_ai_model_job above.
 
@@ -895,6 +1027,8 @@ def generate_ai_model_image_job(provider: str, image_path: str, status_cb=None, 
     is converted to a provider-side polygon budget so the generation arrives
     near that size instead of at the provider's multi-million-triangle
     default. Pass None to get the provider's raw output untouched.
+
+    on_task/cancel_event are Meshy-only, same as generate_ai_model_job.
     """
     provider = provider.upper()
     polycount = _target_polycount(target_vertices)
@@ -905,28 +1039,24 @@ def generate_ai_model_image_job(provider: str, image_path: str, status_cb=None, 
             status_cb("Cache: previously generated from this exact image, reusing...")
         return model_file, f"{provider.capitalize()} AI (image-to-3d, cached)"
     if provider == "MESHY":
-        return _generate_meshy_image_model(image_path, cache_dir, status_cb=status_cb, target_polycount=polycount)
+        return _generate_meshy_image_model(
+            image_path, cache_dir, status_cb=status_cb, target_polycount=polycount,
+            on_task=on_task, cancel_event=cancel_event,
+        )
     if provider == "TRIPO":
         return _generate_tripo_image_model(image_path, cache_dir, status_cb=status_cb, target_polycount=polycount)
     raise ValueError(f"Unknown AI provider '{provider}' (expected MESHY or TRIPO)")
 
 
-def _generate_meshy_image_model(image_path: str, dest_dir: Path, status_cb=None, target_polycount=None) -> tuple[Path, str]:
+def _generate_meshy_image_model(
+    image_path: str, dest_dir: Path, status_cb=None, target_polycount=None, on_task=None, cancel_event=None
+) -> tuple[Path, str]:
     """Image-to-3D via Meshy AI (/v2/image-to-3d): single-stage, always
     textured -- unlike text mode there is no preview/refine split.
 
     target_polycount enables Meshy's own remesher, which returns a model
     already near the budget instead of the ~2M-triangle raw generation."""
-    from ..config import load_env_vars
-    load_env_vars()
-    token = os.environ.get("MESHY_API_KEY")
-    if not token:
-        raise ValueError(
-            "Meshy AI generation requires a free MESHY_API_KEY. "
-            "Get one at https://www.meshy.ai/api and add it to your .env file."
-        )
-
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _meshy_headers()
     # NB: unlike text-to-3d (which lives at /v2/text-to-3d), the image
     # pipeline is documented under /openapi/v1 -- /v2/image-to-3d 404s.
     base_url = "https://api.meshy.ai/openapi/v1/image-to-3d"
@@ -943,8 +1073,10 @@ def _generate_meshy_image_model(image_path: str, dest_dir: Path, status_cb=None,
     task_id = created.get("result")
     if not task_id:
         raise ValueError(f"No task ID returned by Meshy: {created}")
+    if on_task:
+        on_task(task_id, "image-to-3d")
 
-    data = _poll_meshy_task(base_url, task_id, headers, status_cb, "image-to-3d")
+    data = _poll_meshy_task(base_url, task_id, headers, status_cb, "image-to-3d", cancel_event=cancel_event)
 
     model_url = data.get("model_urls", {}).get("glb") or data.get("model_url")
     if not model_url:
