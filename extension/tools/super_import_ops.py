@@ -724,7 +724,7 @@ def cancel_meshy_task(task_id: str, label: str) -> None:
     try:
         headers = _meshy_headers()
         base_url = (
-            "https://api.meshy.ai/v2/text-to-3d"
+            "https://api.meshy.ai/openapi/v2/text-to-3d"
             if label in ("preview", "refine")
             else "https://api.meshy.ai/openapi/v1/image-to-3d"
         )
@@ -826,7 +826,7 @@ def _generate_meshy_model(
     still running server-side -- resume_meshy_model_job can pick the same
     task_id back up later instead of burning a fresh generation."""
     headers = _meshy_headers()
-    base_url = "https://api.meshy.ai/v2/text-to-3d"
+    base_url = "https://api.meshy.ai/openapi/v2/text-to-3d"
     if status_cb:
         status_cb(f"Meshy: submitting prompt '{prompt}'...")
     try:
@@ -866,7 +866,7 @@ def resume_meshy_model_job(
     where it left off, then continue the pipeline (preview -> refine ->
     download) exactly as a fresh run would."""
     headers = _meshy_headers()
-    base_url = "https://api.meshy.ai/v2/text-to-3d"
+    base_url = "https://api.meshy.ai/openapi/v2/text-to-3d"
     if on_task:
         on_task(task_id, label)
 
@@ -1051,14 +1051,13 @@ def generate_ai_model_image_job(
 def _generate_meshy_image_model(
     image_path: str, dest_dir: Path, status_cb=None, target_polycount=None, on_task=None, cancel_event=None
 ) -> tuple[Path, str]:
-    """Image-to-3D via Meshy AI (/v2/image-to-3d): single-stage, always
-    textured -- unlike text mode there is no preview/refine split.
+    """Image-to-3D via Meshy AI (/openapi/v1/image-to-3d): single-stage,
+    always textured -- unlike text mode there is no preview/refine split.
 
     target_polycount enables Meshy's own remesher, which returns a model
     already near the budget instead of the ~2M-triangle raw generation."""
     headers = _meshy_headers()
-    # NB: unlike text-to-3d (which lives at /v2/text-to-3d), the image
-    # pipeline is documented under /openapi/v1 -- /v2/image-to-3d 404s.
+    # NB: image-to-3d is documented under /openapi/v1, not /v2/image-to-3d.
     base_url = "https://api.meshy.ai/openapi/v1/image-to-3d"
     if status_cb:
         status_cb("Meshy: uploading image...")
