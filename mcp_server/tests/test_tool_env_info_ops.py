@@ -69,7 +69,13 @@ async def test_public_config_keys_returned_unmasked(monkeypatch):
     assert result["keys"]["OPENROUTER_VISION_MODEL"]["masked"] == "google/gemini-2.5-flash-lite"
 
 
-async def test_null_or_empty_keys_are_cancelled_with_strikethrough(monkeypatch):
+async def test_null_or_empty_keys_are_cancelled_with_strikethrough(tmp_path, monkeypatch):
+    # Isolate from the real ~/.mcp-blender/.env: collect_env_info() falls back
+    # to reading it directly off disk, so on a dev machine with a real
+    # TRELLIS_API_KEY declared there, delenv alone wouldn't cancel the key.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("TRELLIS_API_KEY", raising=False)
     monkeypatch.setenv("EMPTY_TOKEN_XYZ", "")
 

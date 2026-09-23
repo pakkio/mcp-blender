@@ -161,9 +161,9 @@ async def test_tool_mode_switching():
         mcp = FakeMCP()
         bridge = AsyncMock()
         register_all_tools(mcp, bridge)
-        # Should only have ~14 tools (10 domain facades + standalone search/import/
-        # eval/simplify subtools) -- nowhere near FULL mode's ~138.
-        assert len(mcp.tools) < 20
+        # Should only have ~20 tools (10 domain facades + standalone search/import/
+        # eval/simplify/vision-split/env-info subtools) -- nowhere near FULL mode's ~138.
+        assert len(mcp.tools) < 30
         assert "blender_mesh" in mcp.tools
         assert "simplify_geometry" in mcp.tools
         assert "get_bridge_status" in mcp.tools
