@@ -36,4 +36,5 @@ exports/
 Thumbs.db
 .vscode/
 .idea/
-.claude/
+.claude/*
+!.claude/skills/
