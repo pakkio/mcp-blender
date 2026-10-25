@@ -26,10 +26,10 @@ class AutoLoadPBRTextureSetTool(ToolBase):
         # multi-word keyword like "base_color" match two adjacent tokens
         # while still requiring exact token boundaries for single-word ones.
         category_keywords = [
-            ("base_color", ["basecolor", "base_color", "albedo", "diffuse", "color"]),
+            ("base_color", ["basecolor", "base_color", "albedo", "diffuse", "diff", "color"]),
             ("roughness", ["roughness", "rough", "rgh"]),
             ("metallic", ["metallic", "metalness", "metal"]),
-            ("normal", ["normal", "norm", "nrm"]),
+            ("normal", ["normal", "norm", "nrm", "nor"]),
             ("displacement", ["height", "displacement", "disp", "bump"]),
             ("ao", ["ambient_occlusion", "ao", "occlusion"]),
         ]
@@ -61,6 +61,12 @@ class AutoLoadPBRTextureSetTool(ToolBase):
                         best_pos = pos
                         best_category = category
 
+            if best_category == "normal":
+                # DirectX normals (green channel flipped) look inverted in
+                # Blender, so a GL map always wins over a DX one regardless
+                # of directory listing order.
+                if "normal" in detected_maps and "dx" in tokens:
+                    continue
             if best_category:
                 detected_maps[best_category] = full_path
 
